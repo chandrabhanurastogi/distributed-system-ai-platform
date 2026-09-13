@@ -1,0 +1,26 @@
+name: distributed-microservices
+volumes:
+  order_data:
+  inventory_data:
+services:
+  order-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: order-db
+      POSTGRES_USER: order
+      POSTGRES_PASSWORD: order
+    ports:
+      - "5433:5432"
+    volumes:
+      - order_data:/var/lib/postgresql/data
+
+  inventory-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: inventory-db
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: inventory
+    ports:
+      - "5434:5432"
+    volumes:
+      - inventory_data:/var/lib/postgresql/data

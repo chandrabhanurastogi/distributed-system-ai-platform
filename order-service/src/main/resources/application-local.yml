@@ -1,0 +1,11 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/order-db
+    username: order
+    password: order
+
+
+management:
+  endpoint:
+    health:
+      show-details: always

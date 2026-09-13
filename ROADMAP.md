@@ -46,7 +46,7 @@ scratchpad path and was silently being reused, breaking the build with a
 properly cached distribution. Not an architectural decision — just noted here so it
 isn't a mystery if it resurfaces.)
 
-**Interview questions:** answered in `.prompts/milestone_0.1.md` (2026-09-12) and
+**Interview questions:** answered in `.prompts/completed_milestone_0.1.md` (2026-09-12) and
 reviewed. Q1 (database-per-service trade-offs) and Q5 (why separate deployable
 services) were directionally correct but under-specified — missing, respectively, the
 loss-of-cross-service-ACID-transaction point that motivates all of Phase 3, and the
@@ -86,17 +86,25 @@ implementation).
 
 ### Milestone 0.2 — Containerized local infrastructure + database wiring
 
+**Status: Complete — 2026-09-13** (briefly marked complete, reopened same day over an
+unverified claim, then closed again once independently re-verified — see correction
+note and final verification below)
+
 **Prerequisite — resolved:** Option A confirmed (see Milestone 0.1 note above): two
 separate local `postgres:alpine` containers, one per service. Formal record in
 ADR-0003.
 
-- [ ] `docker-compose.yml` bringing up two Postgres containers (`order-db`,
+- [x] `docker-compose.yml` bringing up two Postgres containers (`order-db`,
       `inventory-db`) for local development
-- [ ] `order-service` and `inventory-service` each get a datasource configured in
+- [x] `order-service` and `inventory-service` each get a datasource configured in
       `application.yml` (profile-based — don't hardcode connection strings)
-- [ ] Actuator health check extended to report DB connectivity (`/actuator/health`
-      shows a `db` component)
-- [ ] ADR-0003 recorded for the database topology decision
+- [x] Actuator health check extended to report DB connectivity (`/actuator/health`
+      shows a `db` component) — `management.endpoint.health.show-details: always`
+      added to each service's `application-local.yml` (scoped to the `local` profile
+      deliberately — `always` exposes component internals to any unauthenticated
+      caller, acceptable for local dev, not something to carry into a real deployment
+      profile without revisiting)
+- [x] ADR-0003 recorded for the database topology decision
 
 **Explicitly out of scope for 0.2:** no entities, no migrations, no repositories yet.
 This milestone is only "can the app see the database," nothing more — kept narrow on
@@ -115,6 +123,64 @@ running; observe `order-service`'s health flip to `DOWN` and `inventory-service`
 health remain `UP` and unaffected. Restart `order-db`; observe `order-service` recover
 without an application restart. This is the concrete test of the isolation claim behind
 choosing Option A over Option B.
+
+**Verified 2026-09-13:** `docker compose up` brought up `order-db` (port `5433`) and
+`inventory-db` (port `5434`) as independent containers with independent named volumes;
+each confirmed reachable and correctly scoped via `psql` inside its own container
+(`current_database`/`current_user` matched per service, no cross-talk). Both services
+wired to `spring-boot-starter-jdbc` + `org.postgresql:postgresql` (versions left
+unpinned, managed by the existing Spring Boot BOM — two bugs caught in review: an
+explicit version pin that skewed one starter to 4.1.0 against the project's actual
+4.1.1, and a stray trailing `"` character in `order-service`'s JDBC URL that had been
+silently accepted as a literal character by the YAML parser). `application.yml` now
+sets `spring.profiles.default: local`; `application-local.yml` per service holds the
+real `spring.datasource.*` values — kept out of the unqualified file specifically so
+Milestone 0.3's Testcontainers tests can override the URL without touching it.
+Failure scenario confirmed exactly as specified at the aggregate level: stopping
+`order-db` alone flipped `order-service`'s top-level `/actuator/health` `status` to
+`DOWN`; restarting it recovered `order-service` without an application restart;
+`inventory-service` was unaffected throughout — the isolation claim behind Option A
+holds in practice, not just on paper.
+
+**Correction (2026-09-13, same day):** this entry originally claimed the response
+showed a `db` sub-component explicitly. That was wrong — `management.endpoint.health.
+show-details` defaults to `never`, so `/actuator/health` only ever returned the
+aggregate `{"status":...}`, confirmed by curling it directly:
+`{"groups":["liveness","readiness"],"status":"UP"}`, no `db` key. The DB check was
+genuinely influencing that aggregate status the whole time (that's why the failure
+test worked), but the milestone's literal acceptance criteria — "shows a `db`
+sub-component also `UP`" — was not actually satisfied and required an additional,
+until-now-missing config change.
+
+**Final verification (2026-09-13):** `show-details: always` added to both services'
+`application-local.yml`. Independently confirmed by curling the live endpoint directly
+(not taken on report this time) — response now includes
+`"db":{"details":{"database":"PostgreSQL","validationQuery":"isValid()"},"status":"UP"}`
+alongside the pre-existing `diskSpace`, `ping`, `ssl`, and liveness/readiness state
+components Boot exposes by default once details are shown. Milestone genuinely
+complete now.
+
+**Interview questions:** asked and answered in-session (not pre-written in this
+document, since none existed before this milestone went active). Q1 (why the health
+check's `DOWN` transition wasn't instant) was initially answered as "waits for a
+timeout," which is true but too vague to defend under questioning; tightened, with
+correct reasoning volunteered along the way, to the actual mechanism — Actuator's
+health check is pull-based (no background polling), a stopped container's closed port
+fails fast at the OS level, and the observed delay is HikariCP's own pool bookkeeping
+(discovering a pooled idle connection is dead, evicting it, opening a replacement).
+Q2 (does `UP` guarantee the next real request succeeds) reached the correct conclusion
+— no — but initially via a scattershot list of unrelated causes (memory leak, network
+issues, credential expiry) rather than one reasoned mechanism; tightened to the
+TOCTOU framing (health check is a snapshot at time T; pool exhaustion between T and
+the next request is the general shape of the divergence, not any single named cause).
+Q3 (cost of Option A at 8 services) was answered as "CPU/memory/storage," which
+contradicts ADR-0003's own resource-footprint arithmetic for 2 containers (~50–100MB
+combined against 24GB RAM) — that arithmetic doesn't flip direction at 8 containers
+either (~200–400MB, still noise). Corrected: the real cost at scale is operational
+bookkeeping (port allocation, `docker-compose.yml` duplication/typo risk, remembering
+what's running), addressed with Compose YAML anchors/extension fields and a documented
+port convention — not by consolidating containers, which would repeat Option B's
+already-rejected isolation loss.
 
 ---
 

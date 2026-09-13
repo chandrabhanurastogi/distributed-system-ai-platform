@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5434/inventory-db
+    username: inventory
+    password: inventory
+
+management:
+  endpoint:
+    health:
+      show-details: always

@@ -4,7 +4,8 @@ This document reflects the **current, actual state** of the system, verified aga
 repository — not the aspirational end state. It is updated every time a milestone changes
 a service boundary, API, database, topic, or consistency guarantee (see `CLAUDE.md` Rule 7).
 
-Last verified against repo: 2026-09-12, commit `ddf65e7`.
+Last verified against repo: 2026-09-13, working tree (Milestone 0.2 changes staged,
+pending commit).
 
 ---
 
@@ -22,16 +23,25 @@ Last verified against repo: 2026-09-12, commit `ddf65e7`.
 
 | Service | Package | State |
 |---|---|---|
-| `order-service` | `com.distributedplatform.orderservice` | Boots. One `@SpringBootApplication` class. No controllers, no persistence, no config. |
-| `inventory-service` | `com.distributedplatform.inventoryservice` | Same — structurally identical to `order-service` right now. |
+| `order-service` | `com.distributedplatform.orderservice` | Boots. One `@SpringBootApplication` class. No controllers. Connects to its own Postgres via a `local`-profile datasource; no entities/persistence layer yet. |
+| `inventory-service` | `com.distributedplatform.inventoryservice` | Same shape as `order-service` — datasource wired, no entities yet. |
 
 Both currently ship `spring-boot-starter-web`, `spring-boot-starter-actuator`,
-`spring-kafka`, and Lombok, but **only the dependency is present — nothing uses Kafka
-yet.** See `CLAUDE.md` → Known Existing Debt.
+`spring-boot-starter-jdbc`, `org.postgresql:postgresql` (runtime), `spring-kafka`, and
+Lombok, but **Kafka is still only a dependency — nothing uses it yet.** See
+`CLAUDE.md` → Known Existing Debt.
 
 ### Data
 
-No database is wired. No entities exist. No migration tool is configured.
+Database-per-service is now wired, not just decided. Each service has its own
+`postgres:17-alpine` container (`order-db`, `inventory-db` — see Infrastructure below
+and ADR-0003) and its own `DataSource` bean, configured via a `local` Spring profile
+(`spring.profiles.default: local` in the base `application.yml`; connection details in
+`application-local.yml`, kept out of the unqualified file so Milestone 0.3's
+Testcontainers integration tests can supply a different URL without touching it).
+
+No entities, no migrations, no repository layer yet — the datasource exists, but
+nothing is persisted through it. That's Milestone 0.3.
 
 ### Communication
 
@@ -39,14 +49,39 @@ None. The two services do not call each other yet, synchronously or asynchronous
 
 ### Infrastructure
 
-No Docker, no Docker Compose, no CI. Everything currently runs by whatever JDK/Gradle
-the developer's machine resolves (which is exactly why the toolchain pin exists — see
-`ADR/0002-java-toolchain.md`).
+`docker/docker-compose.yml` brings up two independent local containers,
+`order-db` and `inventory-db` (both `postgres:17-alpine`, pinned major version), each
+with its own named volume and host port (`5433`, `5434` respectively) — services run
+directly on the host via `./gradlew bootRun`, not inside the Compose network, so they
+reach Postgres via `localhost:<published-port>`, not by container DNS name. No CI yet.
+Everything still runs by whatever JDK/Gradle the developer's machine resolves via the
+toolchain pin (`ADR/0002-java-toolchain.md`).
+
+The per-service isolation this was built for has been demonstrated, not just asserted:
+stopping `order-db` alone flips `order-service`'s health to `DOWN` while
+`inventory-service` remains unaffected, and restarting `order-db` recovers
+`order-service` without an application restart (Milestone 0.2 failure scenario,
+verified 2026-09-13).
 
 ### Observability
 
-None configured. `spring-boot-starter-actuator` is on the classpath but has no exposed
-endpoints configured beyond Spring Boot defaults (`/actuator/health` only, unconfigured).
+A `DataSource` health contributor auto-configures for both services once a
+`DataSource` bean exists (no custom health indicator was written) and genuinely
+influences the aggregate `/actuator/health` `status` — verified by the Milestone 0.2
+failure test. The per-component breakdown is visible: `management.endpoint.health.
+show-details: always` is set in each service's `application-local.yml` (deliberately
+scoped to the `local` profile — `always` exposes component internals, including a
+`validationQuery` string, to any unauthenticated caller; acceptable for local dev,
+not something to carry into a real deployment profile unexamined). Confirmed directly
+by curling the live endpoint: response includes
+`"db":{"details":{"database":"PostgreSQL","validationQuery":"isValid()"},"status":"UP"}`
+alongside Boot's other default-exposed components (`diskSpace`, `ping`, `ssl`,
+liveness/readiness state).
+
+This check is **pull-based** (evaluated only when `/actuator/health` is hit) and
+reflects HikariCP's ability to validate or open a pooled connection *at that moment*
+— a point-in-time fact about the connection pool, not a guarantee that the next real
+request will succeed (pool exhaustion, among other things, can diverge from it).
 
 ---
 
@@ -58,8 +93,8 @@ then, treat it as intent, not fact.
 
 | Service | Responsibility | Owned data | Introduced at | Status |
 |---|---|---|---|---|
-| `order-service` | Create/view orders; caller in resilience experiments | `orders` (own `postgres:alpine` container — ADR-0003) | Phase 0 | Skeleton exists |
-| `inventory-service` | Track/reserve stock; downstream in resilience experiments | `inventory_items` (own `postgres:alpine` container — ADR-0003) | Phase 0 | Skeleton exists |
+| `order-service` | Create/view orders; caller in resilience experiments | `orders` (own `postgres:alpine` container — ADR-0003) | Phase 0 | Datasource wired, no entities yet |
+| `inventory-service` | Track/reserve stock; downstream in resilience experiments | `inventory_items` (own `postgres:alpine` container — ADR-0003) | Phase 0 | Datasource wired, no entities yet |
 | `payment-service` | Third Saga participant; can succeed or fail to force compensation | `payments` (own DB) | Start of Phase 3 | Not created |
 | `notification-service` | Pure Kafka consumer, no other responsibility — kept deliberately "boring" so Phase 4 consumer-group experiments aren't confounded by unrelated logic | none (stateless relay, or a minimal delivery log) | Phase 3/4 boundary | Not created |
 | `shipping-service` | TBD | TBD | **Not scheduled** — see decision note below | Not created |
@@ -112,3 +147,4 @@ active, per `CLAUDE.md` Rule 5 (don't document what doesn't exist yet).
 |---|---|
 | 2026-09-12 | Initial version. Documents the bare two-service Gradle skeleton as scaffolded; no architecture decisions beyond build tooling have been made yet. |
 | 2026-09-12 | §2 database-per-service decision resolved: Option A (one local `postgres:alpine` container per service). See ADR-0003. Two detours — managed cloud Postgres, and a shared instance with two logical databases — were considered and rejected along the way. |
+| 2026-09-13 | Milestone 0.2 complete: ADR-0003's Option A implemented and proven, not just decided. `docker/docker-compose.yml` brings up `order-db`/`inventory-db`; both services wired to their own Postgres via `spring-boot-starter-jdbc` and a `local` profile; `management.endpoint.health.show-details: always` makes the `db` sub-component visible. Failure/recovery scenario verified end-to-end, including the sub-component itself: stopping `order-db` alone flips only `order-service`'s `db` status to `DOWN` (and thus its aggregate status); restarting it recovers without an app restart; `inventory-service` unaffected throughout. |
