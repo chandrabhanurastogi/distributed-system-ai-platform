@@ -14,9 +14,46 @@ inform it, would just mean rewriting it later. See `CLAUDE.md` Rule 5.
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` done (only after the
 full Definition of Done checklist in `CLAUDE.md` is satisfied).
 
+**Two-track structure (decided 2026-09-14):** the human is actively interviewing for
+Senior AI Engineer roles, which creates a real, external timing pressure that pure
+sequential ordering doesn't serve. Rather than reordering the whole curriculum, phases
+split into two tracks based on actual dependency, not convenience:
+
+- **Track A (Distributed Systems):** Phases 0–5, sequential as originally designed.
+- **Track B (AI Foundations):** Phase 6 (LLM API fundamentals), Phase 7
+  (vector/retrieval math from scratch), and Phase 8 (RAG) are unlocked to start now, in
+  parallel with Track A. Phase 8's real dependency is Phase 6/7 (LLM and embedding
+  fundamentals), not the distributed backbone — RAG over `dispute-service`'s
+  chargeback/scheme-rule *documents* needs a document corpus and `pgvector`, not real
+  transactional data from `order-service`/`inventory-service`.
+
+Phase 10 (Agents) is the one phase individually assessed as genuinely needing Track A:
+its whole premise is tool-calling "grounded in this project's own data" — a real
+transaction lookup, a real dispute-status lookup — which is meaningless against mocked
+services. It stays gated on enough of Track A existing (at minimum Milestone 0.4's REST
+layer) for that grounding claim to be true rather than aspirational. This avoids the
+two failure modes of resequencing badly: freezing all AI work behind five phases of
+distributed-systems work a real interview timeline can't wait for, or front-loading
+every AI phase and quietly downgrading Agents/MCP into toy-tool demonstrations — the
+weaker, more generic version of exactly the story a Senior AI Engineer interview is
+going to probe for.
+
+**Domain grounding for the AI-specific work:** Phase 8 and Phase 10 are grounded in a
+new fictional service, `dispute-service` (introduced at Phase 8 — see its own section
+below), modeling public, standard payment-industry concepts (chargebacks, dispute
+reason codes, scheme rules) — deliberately *not* modeled on any specific employer's
+actual internal systems, regardless of the human's professional background in the
+space. `order-service`/`inventory-service`/`payment-service` are not renamed; they
+already map cleanly onto transaction/authorization concepts and renaming working,
+tested code for narrative flavor alone would be pure busywork.
+
 ---
 
 ## Phase 0 — Engineering Foundation
+
+**Status: Complete — 2026-09-14** (Milestone 0.4 was its last blocking milestone; the
+CI/config-management backlog items below remain open but were never required to close
+this phase — see Phase 0 backlog)
 
 **Goal:** two real, independently-testable, database-backed services with a working
 local dev loop — no cross-service calls yet, no Kafka activity yet. This is the
@@ -287,18 +324,123 @@ exists but multiple sources disagree on which version).
 
 ---
 
-### Milestone 0.4 — REST API + layered structure + tests (sketched, detailed when 0.3 is done)
+### Milestone 0.4 — REST API + layered structure + tests
 
-- [ ] `order-service`: `POST /orders`, `GET /orders/{id}`
-- [ ] `inventory-service`: `GET /inventory/{sku}`, `POST /inventory/{sku}/reserve`
-- [ ] Unit tests for service-layer logic (no Spring context)
-- [ ] Integration tests for the full HTTP → service → DB path (MockMvc/WebTestClient +
-      Testcontainers)
-- [ ] Structured JSON logging with a correlation ID in the MDC (plain servlet filter —
+**Status: Complete — 2026-09-14**
+
+- [x] `order-service`: `POST /orders` (201 + `Location` header + body), `GET
+      /orders/{id}` (200 or 404)
+- [x] `inventory-service`: `GET /inventory/{sku}` (200 or 404), `POST
+      /inventory/{sku}/reserve` (200 on success, 409 on insufficient stock)
+- [x] Controller → Service → Repository layering in both services; repositories stay
+      exactly as Milestone 0.3 left them (no changes to `save`/`findById`)
+- [x] `findById`'s `EmptyResultDataAccessException` (Known Existing Debt from 0.3) gets
+      resolved here: service layer catches it and the controller maps "not found" to a
+      real HTTP 404, not a default 500
+- [x] `InventoryItemRepository` gains one new method, `findBySku` (the API is keyed by
+      SKU, not the internal DB id — `findById` alone can't serve `GET /inventory/{sku}`)
+- [x] Unit tests for service-layer logic (plain JUnit + Mockito, no Spring context)
+- [x] Integration tests for the full HTTP → service → DB path (MockMvc + the same
+      Testcontainers pattern as 0.3)
+- [x] Structured JSON logging with a correlation ID in the MDC (plain servlet filter —
       no OpenTelemetry yet, that's Phase 5)
 
-**Acceptance criteria and full task breakdown to be finalized when Milestone 0.3 is
-verified done** — deliberately not over-specified this far in advance.
+**Deliberate design choice — the first real business logic, and a live bug, on
+purpose:** `reserve` is a genuine read-then-conditional-write (check quantity, decide,
+update) — exactly the composite operation named as a forward-looking gap in
+`CLAUDE.md`'s Known Existing Debt after Milestone 0.3. It gets a `@Transactional`
+service-layer boundary here (closing the "no method spans multiple statements" gap),
+but is implemented as the **naive** version — a separate `SELECT` then `UPDATE`, not
+an atomic conditional `UPDATE ... WHERE quantity >= :n`. This is intentional, not an
+oversight: it leaves a real, reproducible lost-update race under concurrent access
+sitting in the codebase for Phase 1 to actually find, measure, and fix with a genuine
+experiment (fire N concurrent reservations against limited stock, measure how much
+overselling actually occurs) rather than a synthetic textbook example. `@Transactional`
+here guarantees the service's own two statements commit or roll back together — it
+does **not** claim to prevent concurrent overselling, and that distinction must be
+stated explicitly wherever this is documented, not glossed over.
+
+**Explicitly out of scope for 0.4:** no cross-service calls yet (that's Phase 1 — this
+milestone is each service's own API in isolation), no fix for the reservation race
+(Phase 1), no OpenTelemetry (Phase 5).
+
+**Acceptance criteria:** `./gradlew test` passes unit and integration tests for both
+services. Manually verified via `curl`: creating an order and fetching it by id
+succeeds; fetching a nonexistent order id returns 404; reserving available stock
+succeeds and decrements quantity; reserving more than available stock returns 409
+without decrementing; every response is logged with a correlation ID present in the
+structured log output.
+
+**Interview questions (answer before moving on):**
+- Why does a `@Transactional` boundary around `reserve` not prevent two concurrent
+  requests from overselling the same SKU? Walk through the actual interleaving.
+- Why is `findBySku` a new repository method rather than reusing `findById` with a
+  lookup translation somewhere else?
+- What's the actual difference between a 404 (order not found) and a 409 (insufficient
+  stock) in HTTP semantics — why isn't insufficient stock also a 404 or a 400?
+
+**Verified 2026-09-14:** `./gradlew clean test` — 19 tests across both services, 0
+failures, 0 errors, confirmed via the JUnit XML reports directly, not just the
+aggregate build status. Manually verified via `curl` against real running instances
+(not just the test suite): `POST /orders` returns 201 with `Location` and a body;
+`GET /orders/{id}` returns 200 for an existing order and 404 with a real message for a
+missing one; `GET /inventory/{sku}` returns 200/404 correctly; `POST
+/inventory/{sku}/reserve` correctly decrements on success (5→2 for a reserve-3),
+returns 409 with the actual requested/available counts when stock is insufficient, and
+400 for a non-positive quantity — verified against actual Postgres state via `psql`
+after each call, not just the HTTP response. Every response carries an
+`X-Correlation-Id` header, and structured JSON logging is genuinely active (confirmed
+real `@timestamp`/`logger_name`/`level` JSON fields in the running services' console
+output, using Spring Boot 4's native `logging.structured.format.console: logstash`
+support — no `logstash-logback-encoder` dependency needed, which avoided reintroducing
+an unmanaged, hand-pinned version after Milestone 0.3 established that pattern should
+be avoided).
+
+**Bugs found and fixed (same discipline as 0.3 — root-caused via direct inspection,
+not guessed):**
+- A stale `bootRun` process from earlier in the session was still holding port 8080,
+  causing a fresh `order-service` start to fail with "Port 8080 was already in use" —
+  not a code bug, but a reminder to actually check `lsof` before assuming a failure is
+  code-related.
+- `spring-boot-starter-test` no longer bundles MockMvc's web test autoconfiguration in
+  Spring Boot 4 — that moved into its own `spring-boot-starter-webmvc-test` module,
+  and `@AutoConfigureMockMvc` itself moved package from
+  `org.springframework.boot.test.autoconfigure.web.servlet` to
+  `org.springframework.boot.webmvc.test.autoconfigure`. Confirmed both by inspecting
+  the actual resolved jars, matching the exact pattern of Boot 4 surprises from
+  Milestone 0.3.
+- `JsonPath.read()` parses JSON numbers as `Integer` by default; binding its generic
+  return type directly to a `long` variable causes a `ClassCastException` at
+  runtime (`Integer` cannot unbox into `Long`) — fixed by reading as `Number` first
+  and calling `.longValue()`.
+
+**Interview:** three rounds. Q1 (why `@Transactional` doesn't prevent overselling)
+took two passes — the first answer was correct in conclusion (pessimistic locking
+needed) but described the race vaguely ("threads may commit at the same time"); the
+second, prompted for a concrete step-by-step trace, correctly identified that both
+transactions read the pre-update value before either writes, and additionally
+surfaced an important, unprompted point: with the current unconditional `UPDATE`, the
+overwrite is **silent** — no exception, both callers get `200 OK`, and the resulting
+DB value can look entirely plausible (not negative) even though the underlying
+business fact — who actually holds a valid reservation — is wrong. This led directly
+to a real-time test of the plan itself: the human asked to implement pessimistic
+locking immediately, which was named as a direct conflict with Phase 1's design (see
+ADR-0005) — the human chose to stay on plan, the strongest possible confirmation that
+leaving the bug in was correct. Q2 (why `findBySku` isn't unified with `findById` via
+a translation layer) reached for general software-engineering virtues (coupling,
+extensibility) rather than the specific mechanical reason — the two methods query
+different columns entirely, and a translation layer would need to run the equivalent
+of `findBySku` anyway just to convert a SKU into an `id`, making it strictly more
+expensive, not more decoupled. The human also independently noticed `findById` is now
+unused by any production code path — a genuinely good catch, correctly left alone
+since it's still exercised by Milestone 0.3's own test and the roadmap had already
+committed to not touching it. Q3 (404 vs. 409) correctly explained 404, added a nice
+unprompted business angle (409 signals "needs restocking" vs. 404's "doesn't exist"),
+but didn't address why not 400 without a direct explanation — resolved by explaining
+RFC 9110's actual distinction: 400 means the request is intrinsically invalid
+regardless of server state (checkable with zero database access, which is exactly why
+the quantity validation runs before `getBySku`); 409 means a well-formed request
+conflicts with current state and could succeed unchanged later.
 
 ---
 
@@ -386,15 +528,20 @@ Detailed milestones written when Phase 4 is complete.
 
 ## Phase 6 — Spring AI and LLM Foundations
 
+**Track B — unlocked, no dependency on Track A.** Can start now, in parallel with
+Phase 0/1, per the two-track decision above.
+
 **Goal:** direct LLM API calls first (chat completion, system/user messages, tokens,
 context windows, temperature, structured output, tool calling) *before* Spring AI
 abstractions — the fundamentals must not be hidden behind a framework on day one.
 
-Detailed milestones written when Phase 5 is complete.
+Detailed milestones written when this phase is actually started.
 
 ---
 
 ## Phase 7 — Vector and Retrieval Foundations
+
+**Track B — unlocked, no dependency on Track A.** Real prerequisite is Phase 6.
 
 **Goal:** cosine similarity implemented and tested from scratch (dot product → vector
 magnitude → cosine similarity) before touching a real embedding model or a VectorStore.
@@ -406,10 +553,22 @@ Detailed milestones written when Phase 6 is complete.
 
 ## Phase 8 — RAG
 
+**Track B — unlocked, no dependency on Track A.** Real prerequisite is Phase 6/7 (LLM
+and embedding fundamentals) — this phase needs a document corpus and `pgvector`, not
+real transactional data, so it does not need to wait on the distributed backbone.
+
 **Goal:** full ingestion → chunking → embedding → indexing → retrieval → reranking →
-context construction → LLM → answer pipeline. Chunking strategies compared
-experimentally (fixed/sentence/paragraph/recursive/overlap/semantic). Dense, BM25,
-hybrid, reranking, HyDE — each benchmarked, none assumed to help by default.
+context construction → LLM → answer pipeline, applied to `dispute-service`'s
+chargeback/scheme-rule reference documents (public, standard payment-industry
+terminology — see two-track note above; not modeled on any specific employer's actual
+internal systems). Chunking strategies compared experimentally
+(fixed/sentence/paragraph/recursive/overlap/semantic). Dense, BM25, hybrid, reranking,
+HyDE — each benchmarked, none assumed to help by default. Introduces `dispute-service`
+as a new deployable service with its own Postgres (`dispute-db`, `pgvector` extension
+— same database-per-service pattern as ADR-0003) and, per the human's own architectural
+instinct, decoupled from any synchronous request path via the same async/event-driven
+pattern Kafka is already scheduled to introduce at Phase 3/4 — heavy AI work
+(embedding, retrieval) has no business blocking a REST response.
 
 Detailed milestones written when Phase 7 is complete.
 
@@ -429,10 +588,19 @@ Detailed milestones written when Phase 8 is complete.
 
 ## Phase 10 — Agents and Tool Calling
 
+**The one AI phase individually assessed as needing Track A** (see two-track note
+above) — gated on at least Milestone 0.4's REST layer existing, so "grounded in this
+project's own data" is a true statement rather than an aspiration.
+
 **Goal:** single agent first, small number of real tools grounded in this project's own
-data (search orders, get inventory, lookup customer, search docs). Guardrails: invalid
-tool arguments, unauthorized/destructive operations, excessive tool loops, tool
-failures, timeouts, token budgets.
+data — look up a transaction (`order-service`), check dispute status
+(`dispute-service`), retrieve the applicable chargeback/scheme rule via Phase 8's RAG
+capability. This is deliberately the strongest "real system, not tutorial" signal in
+the AI curriculum, per the two-track decision — an agent calling real services with
+real latency and real failure modes is a categorically different interview story than
+one calling mocked functions. Guardrails: invalid tool arguments,
+unauthorized/destructive operations, excessive tool loops, tool failures, timeouts,
+token budgets.
 
 Detailed milestones written when Phase 9 is complete.
 

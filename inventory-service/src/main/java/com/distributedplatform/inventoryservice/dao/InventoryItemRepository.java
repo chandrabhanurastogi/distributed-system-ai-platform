@@ -15,7 +15,18 @@ public class InventoryItemRepository{
     public InventoryItemDto findById(long id) {
         String sql = "SELECT id, sku, quantity, created_at FROM inventory_items WHERE id = :id";
         MapSqlParameterSource params = new MapSqlParameterSource("id", id);
-        //TODO: Handle 404
+        // 404 mapping now handled in InventoryService (Milestone 0.4)
+        return jdbcTemplate.queryForObject(sql, params, (rs, rowNum) -> new InventoryItemDto(
+                rs.getLong("id"),
+                rs.getString("sku"),
+                rs.getInt("quantity"),
+                rs.getTimestamp("created_at").toLocalDateTime()
+        ));
+    }
+
+    public InventoryItemDto findBySku(String sku) {
+        String sql = "SELECT id, sku, quantity, created_at FROM inventory_items WHERE sku = :sku";
+        MapSqlParameterSource params = new MapSqlParameterSource("sku", sku);
         return jdbcTemplate.queryForObject(sql, params, (rs, rowNum) -> new InventoryItemDto(
                 rs.getLong("id"),
                 rs.getString("sku"),
@@ -38,5 +49,12 @@ public class InventoryItemRepository{
         return jdbcTemplate.queryForObject(sql, params, Long.class);
     }
 
+    public void updateQuantity(String sku, int newQuantity) {
+        String sql = "UPDATE inventory_items SET quantity = :quantity WHERE sku = :sku";
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("quantity", newQuantity)
+                .addValue("sku", sku);
 
+        jdbcTemplate.update(sql, params);
+    }
 }

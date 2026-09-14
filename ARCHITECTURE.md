@@ -4,8 +4,8 @@ This document reflects the **current, actual state** of the system, verified aga
 repository — not the aspirational end state. It is updated every time a milestone changes
 a service boundary, API, database, topic, or consistency guarantee (see `CLAUDE.md` Rule 7).
 
-Last verified against repo: 2026-09-14, working tree (Milestone 0.3 changes staged,
-pending commit).
+Last verified against repo: 2026-09-14, working tree (Milestone 0.4 changes staged,
+pending commit). Phase 0 is complete as of this milestone.
 
 ---
 
@@ -23,8 +23,8 @@ pending commit).
 
 | Service | Package | State |
 |---|---|---|
-| `order-service` | `com.distributedplatform.orderservice` | Boots. No controllers yet (Milestone 0.4). Persists `Order` (plain class, not a JPA entity — ADR-0004) to its own Postgres via a hand-written `OrderRepository` (`NamedParameterJdbcTemplate`). |
-| `inventory-service` | `com.distributedplatform.inventoryservice` | Same shape — persists `InventoryItemDto` to `inventory_items` via `InventoryItemRepository`, same plain-JDBC pattern. |
+| `order-service` | `com.distributedplatform.orderservice` | `POST /orders`, `GET /orders/{id}` (404 on miss). Controller → Service → Repository. Persists `Order` (plain class, not a JPA entity — ADR-0004) via `OrderRepository` (`NamedParameterJdbcTemplate`). |
+| `inventory-service` | `com.distributedplatform.inventoryservice` | `GET /inventory/{sku}` (404 on miss), `POST /inventory/{sku}/reserve` (200, 409 on insufficient stock, 400 on invalid quantity). Same layering; `InventoryService.reserve` is the first `@Transactional` method in the codebase — see Data section below for a known, deliberate limitation of that boundary. |
 
 Both currently ship `spring-boot-starter-web`, `spring-boot-starter-actuator`,
 `spring-boot-starter-jdbc`, `spring-boot-starter-flyway`, `flyway-database-postgresql`,
@@ -50,14 +50,27 @@ together, neither alone is sufficient). Each service has one migration:
 
 Persistence is **plain JDBC, not JPA** (ADR-0004) — `NamedParameterJdbcTemplate` +
 hand-written `RowMapper`s, no ORM session. `Order` and `InventoryItemDto` are plain
-Lombok-`@Data` classes, not `@Entity`-annotated. Each repository has exactly two
-operations (`save`, `findById`), both single-statement and therefore already
-individually atomic — no method currently spans multiple statements, so no
-`@Transactional` boundary exists yet anywhere in the codebase. `findById` throws
-`EmptyResultDataAccessException` on a missing row rather than returning null/`Optional`
-— an open item, tracked in `CLAUDE.md` → Known Existing Debt, since it needs a real
-decision once Milestone 0.4 adds a `GET /orders/{id}` that has to turn "not found" into
-an HTTP 404.
+Lombok-`@Data` classes, not `@Entity`-annotated. `findById`/`save` remain exactly as
+Milestone 0.3 left them; `InventoryItemRepository` gained `findBySku` (the API is
+keyed by SKU, not the internal id) and `updateQuantity` in Milestone 0.4.
+
+`findById`'s `EmptyResultDataAccessException` is now resolved at the service layer:
+`OrderService`/`InventoryService` catch it and rethrow domain-specific exceptions
+(`OrderNotFoundException`, `InventoryItemNotFoundException`), which
+`@RestControllerAdvice` maps to a real HTTP 404. Persistence-specific exception types
+never reach the web layer.
+
+**`InventoryService.reserve` is the first method with a `@Transactional` boundary in
+this codebase, and it has a known, deliberate concurrency gap (ADR-0005).** It reads
+the current quantity, decides in application code, then writes — a separate `SELECT`
+and `UPDATE`, not an atomic conditional statement. `@Transactional` guarantees those
+two statements commit or roll back together; it does **not** prevent two concurrent
+callers from both reading the same pre-update quantity and both writing back a
+decremented value, silently overselling with no exception raised on either side. This
+is intentional: the bug is left in place for Phase 1 to measure and fix with a real
+concurrency experiment, not fixed prematurely. See ADR-0005 for the full reasoning,
+including a real-time test of this plan (the human asked to fix it immediately during
+Milestone 0.4's interview and consciously chose not to once the conflict was named).
 
 Round-trip correctness is proven by a Testcontainers-backed integration test per
 service (`OrderRepositoryTest`, `InventoryItemRepositoryTest`) — each spins up its own
@@ -106,6 +119,20 @@ reflects HikariCP's ability to validate or open a pooled connection *at that mom
 — a point-in-time fact about the connection pool, not a guarantee that the next real
 request will succeed (pool exhaustion, among other things, can diverge from it).
 
+**Milestone 0.4 adds structured JSON request logging with a correlation ID**, via a
+plain `jakarta.servlet.Filter` (`CorrelationIdFilter`, duplicated identically in both
+services — no shared module exists yet, and two small filter classes don't meet the
+bar for introducing one). It honors an incoming `X-Correlation-Id` header if present
+(so a caller's correlation ID propagates rather than being overwritten — relevant once
+Phase 1 adds real cross-service calls), generates one otherwise, puts it in the SLF4J
+MDC for the request's duration, and echoes it back as a response header. Log output is
+genuine structured JSON via Spring Boot 4's **native** `logging.structured.format.
+console: logstash` support (`spring.boot.logging.logback.LogstashStructuredLogFormatter`,
+already on the classpath) — no `logstash-logback-encoder` or any other unmanaged
+dependency was added; this is a config-only capability in current Spring Boot. No
+OpenTelemetry yet (Phase 5) — this is deliberately the "plain servlet filter" version
+`ROADMAP.md` calls for, not distributed tracing.
+
 ---
 
 ## 2. Target Service Topology (PROPOSED — not yet implemented)
@@ -120,6 +147,7 @@ then, treat it as intent, not fact.
 | `inventory-service` | Track/reserve stock; downstream in resilience experiments | `inventory_items` (own `postgres:alpine` container — ADR-0003) | Phase 0 | Persists via plain JDBC, no REST API yet |
 | `payment-service` | Third Saga participant; can succeed or fail to force compensation | `payments` (own DB) | Start of Phase 3 | Not created |
 | `notification-service` | Pure Kafka consumer, no other responsibility — kept deliberately "boring" so Phase 4 consumer-group experiments aren't confounded by unrelated logic | none (stateless relay, or a minimal delivery log) | Phase 3/4 boundary | Not created |
+| `dispute-service` | RAG over chargeback/scheme-rule reference documents (Phase 8); later, real tool-calling target for Phase 10's agent — a fictional service modeling public payment-industry concepts, not any specific employer's actual systems (see `ROADMAP.md` two-track decision, 2026-09-14) | reference documents + embeddings (own Postgres with `pgvector` — same database-per-service pattern as ADR-0003) | Phase 8 | Not created |
 | `shipping-service` | TBD | TBD | **Not scheduled** — see decision note below | Not created |
 
 **Decision note on `shipping-service`:** deliberately not committed to a phase. No
@@ -172,3 +200,5 @@ active, per `CLAUDE.md` Rule 5 (don't document what doesn't exist yet).
 | 2026-09-12 | §2 database-per-service decision resolved: Option A (one local `postgres:alpine` container per service). See ADR-0003. Two detours — managed cloud Postgres, and a shared instance with two logical databases — were considered and rejected along the way. |
 | 2026-09-13 | Milestone 0.2 complete: ADR-0003's Option A implemented and proven, not just decided. `docker/docker-compose.yml` brings up `order-db`/`inventory-db`; both services wired to their own Postgres via `spring-boot-starter-jdbc` and a `local` profile; `management.endpoint.health.show-details: always` makes the `db` sub-component visible. Failure/recovery scenario verified end-to-end, including the sub-component itself: stopping `order-db` alone flips only `order-service`'s `db` status to `DOWN` (and thus its aggregate status); restarting it recovers without an app restart; `inventory-service` unaffected throughout. |
 | 2026-09-14 | Milestone 0.3 complete: ADR-0004 (plain JDBC + Flyway, not JPA + Liquibase) implemented. Each service has one Flyway migration and a hand-written repository (`OrderRepository`, `InventoryItemRepository`) over `NamedParameterJdbcTemplate`. Round-trip correctness proven per service via a Testcontainers-backed integration test, verified to pass with local dev Postgres containers stopped entirely — genuine independence from `docker-compose`, not assumed. No REST API yet (Milestone 0.4); no transaction boundary exists yet since both repository operations are single-statement (tracked as a forward-looking gap for when a composite operation like stock reservation is introduced, and explicitly not solved by `@Transactional` alone — see `CLAUDE.md` → Known Existing Debt and Phase 1). |
+| 2026-09-14 | §2 target topology extended: `dispute-service` added (Phase 8), driven by the human's active Senior AI Engineer interview timeline — see `ROADMAP.md`'s two-track decision. Phase 6/7/8 (AI foundations) unlocked to run in parallel with the distributed-systems track rather than waiting for Phase 5, since none of them depend on it; Phase 10 (Agents) stays gated on the real backbone since its entire premise requires genuinely real tool-calling targets. `dispute-service` models public, standard payment-industry concepts (chargebacks, scheme rules) — a deliberate choice, not modeled on any specific employer's actual internal systems despite the human's professional background in the space. |
+| 2026-09-14 | Milestone 0.4 complete — **Phase 0 complete.** Both services gained a real REST API (Controller → Service → Repository), domain exceptions mapped to HTTP status (404/409/400) via `@RestControllerAdvice`, and structured JSON request logging with a propagating correlation ID (Spring Boot 4's native `logging.structured.format.console: logstash`, no new dependency). `InventoryService.reserve` is the first `@Transactional` method in the codebase and carries a known, deliberate lost-update race (ADR-0005) — left in on purpose as a real baseline for Phase 1's concurrency experiment, not fixed prematurely; this was tested for real when the human asked to fix it immediately during the milestone's interview and chose to stay on plan once the conflict was named. |

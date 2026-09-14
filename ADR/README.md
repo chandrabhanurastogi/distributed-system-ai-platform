@@ -38,3 +38,4 @@ Why the other options lost — specifically, not just "we preferred X."
 | [0002](0002-java-toolchain.md) | Java 25 (LTS) pinned via Gradle toolchain + auto-provisioning | Accepted |
 | [0003](0003-local-postgres-per-service.md) | Local Postgres container per service, not shared, not cloud-hosted | Accepted |
 | [0004](0004-plain-jdbc-and-flyway.md) | Plain JDBC over Spring Data JPA, and Flyway over Liquibase | Accepted |
+| [0005](0005-deliberate-concurrency-bug.md) | Ship a known lost-update race in `reserve`, on purpose, for Phase 1 | Accepted |
