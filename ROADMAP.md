@@ -38,14 +38,36 @@ every AI phase and quietly downgrading Agents/MCP into toy-tool demonstrations �
 weaker, more generic version of exactly the story a Senior AI Engineer interview is
 going to probe for.
 
-**Domain grounding for the AI-specific work:** Phase 8 and Phase 10 are grounded in a
-new fictional service, `dispute-service` (introduced at Phase 8 — see its own section
-below), modeling public, standard payment-industry concepts (chargebacks, dispute
-reason codes, scheme rules) — deliberately *not* modeled on any specific employer's
-actual internal systems, regardless of the human's professional background in the
-space. `order-service`/`inventory-service`/`payment-service` are not renamed; they
-already map cleanly onto transaction/authorization concepts and renaming working,
-tested code for narrative flavor alone would be pure busywork.
+**Phase 12 (multi-agent, decided in scope 2026-09-14) inherits Phase 10's gating**,
+not Phase 11's — its real dependency is having a single-agent baseline to prove
+insufficient (Phase 10), not MCP. Sequenced directly after Phase 10; Phase 11 (MCP)
+can proceed independently, in either order.
+
+**Domain grounding for the AI-specific work:** Phase 8, 10, and 12 are all grounded in
+one new fictional service, `dispute-service` (introduced at Phase 8 — see its own
+section below), modeling public, standard payment-industry concepts (chargebacks,
+dispute reason codes, scheme rules) — deliberately *not* modeled on any specific
+employer's actual internal systems, regardless of the human's professional background
+in the space. This is a conscious choice, revisited and reconfirmed once already
+(2026-09-14): a first pass at expanding this domain proposed a standalone service
+named after a specific employer's actual internal system, which was rejected on the
+same grounds as the original decision — see Phase 8's section for detail.
+`order-service`/`inventory-service`/`payment-service` are not renamed; they already
+map cleanly onto transaction/authorization concepts and renaming working, tested code
+for narrative flavor alone would be pure busywork.
+
+**What this project is and isn't for, stated plainly (2026-09-14):** this repository
+and its AI/payments-domain work are a private practice ground for building genuine
+technical fluency — they are not the material the human intends to present in
+interviews. The human's actual interview material is real production work on a real
+payment network, done as part of a larger team; this project exists to sharpen the
+ability to explain and defend that real work's underlying concepts (multi-agent
+orchestration, evidence validation, human-in-the-loop approval, dependency governance
+under fast-moving AI libraries) with hands-on depth, not to generate resume claims
+about this codebase itself. Any resume/interview language should describe what was
+actually built where it was actually built — this project earning you fluency in a
+concept is not the same claim as this project having shipped that concept in
+production, and the two must not be conflated in outward-facing material.
 
 ---
 
@@ -558,17 +580,43 @@ and embedding fundamentals) — this phase needs a document corpus and `pgvector
 real transactional data, so it does not need to wait on the distributed backbone.
 
 **Goal:** full ingestion → chunking → embedding → indexing → retrieval → reranking →
-context construction → LLM → answer pipeline, applied to `dispute-service`'s
-chargeback/scheme-rule reference documents (public, standard payment-industry
-terminology — see two-track note above; not modeled on any specific employer's actual
-internal systems). Chunking strategies compared experimentally
+context construction → LLM → answer pipeline, applied to `dispute-service`'s reference
+corpus — chargeback/dispute-handling policy documents **and** network/interchange
+scheme-rule documents (bin ranges, interchange thresholds, filing-deadline rules) in
+the *same* corpus, not a separate service. (An earlier draft of this plan proposed a
+standalone `cdc-service` for the scheme-rule side, named after a specific employer's
+internal system — rejected on two grounds: the name itself was too close to
+proprietary internal branding to reuse even genericized, and there was no
+distributed-systems or AI concept a second service would teach that a richer
+single-service corpus doesn't already cover. One service, two document categories.)
+
+Chunking strategies compared experimentally
 (fixed/sentence/paragraph/recursive/overlap/semantic). Dense, BM25, hybrid, reranking,
-HyDE — each benchmarked, none assumed to help by default. Introduces `dispute-service`
-as a new deployable service with its own Postgres (`dispute-db`, `pgvector` extension
-— same database-per-service pattern as ADR-0003) and, per the human's own architectural
-instinct, decoupled from any synchronous request path via the same async/event-driven
-pattern Kafka is already scheduled to introduce at Phase 3/4 — heavy AI work
-(embedding, retrieval) has no business blocking a REST response.
+HyDE — each benchmarked, none assumed to help by default, **evaluated against a
+concrete downstream task, not just retrieval-in-the-abstract**: given real,
+unstructured customer claim text ("I was charged twice at this restaurant") and real,
+publicly-published network reason codes (e.g. Visa 10.4 — Fraud, 13.1 — Not as
+Described/Received), does retrieval quality actually change classification accuracy?
+This gives chunking/retrieval-strategy comparisons a measurable outcome instead of an
+abstract "did it find the right paragraph."
+
+**Explicitly out of scope, named so it doesn't quietly creep back in:**
+- **OCR / multimodal receipt processing.** Realistic claim inputs use hand-written
+  synthetic "receipt summary" text (merchant, line items, timestamp) — not an actual
+  OCR/vision pipeline. That's a third AI capability beyond the two chosen (RAG,
+  agents/multi-agent) and was deliberately not selected when scope was narrowed.
+- **Filing-deadline / date-window checking is not a RAG task.** "Is this claim within
+  120 days of settlement" is deterministic date arithmetic — it belongs to Phase 10 as
+  a plain tool call, not to an LLM's reasoning, grounded or otherwise. Do not let an
+  LLM compute it even "with retrieved context" — that's a reliability anti-pattern a
+  technical interviewer will specifically probe for, not a feature.
+
+Introduces `dispute-service` as a new deployable service with its own Postgres
+(`dispute-db`, `pgvector` extension — same database-per-service pattern as ADR-0003)
+and, per the human's own architectural instinct, decoupled from any synchronous
+request path via the same async/event-driven pattern Kafka is already scheduled to
+introduce at Phase 3/4 — heavy AI work (embedding, retrieval) has no business blocking
+a REST response.
 
 Detailed milestones written when Phase 7 is complete.
 
@@ -595,12 +643,20 @@ project's own data" is a true statement rather than an aspiration.
 **Goal:** single agent first, small number of real tools grounded in this project's own
 data — look up a transaction (`order-service`), check dispute status
 (`dispute-service`), retrieve the applicable chargeback/scheme rule via Phase 8's RAG
-capability. This is deliberately the strongest "real system, not tutorial" signal in
-the AI curriculum, per the two-track decision — an agent calling real services with
-real latency and real failure modes is a categorically different interview story than
-one calling mocked functions. Guardrails: invalid tool arguments,
-unauthorized/destructive operations, excessive tool loops, tool failures, timeouts,
-token budgets.
+capability, and **check whether a claim falls within the network's filing-deadline
+window** via a plain deterministic tool (date arithmetic on real timestamps — no LLM
+reasoning involved in the computation itself, only in deciding to call the tool and
+interpreting its boolean result). This is deliberately the strongest "real system, not
+tutorial" signal in the AI curriculum, per the two-track decision — an agent calling
+real services with real latency and real failure modes, and knowing which decisions to
+delegate to deterministic code rather than the model, is a categorically different
+interview story than one calling mocked functions and reasoning about dates in-model.
+Guardrails: invalid tool arguments, unauthorized/destructive operations, excessive
+tool loops, tool failures, timeouts, token budgets.
+
+This single agent is also the deliberate baseline Phase 12 needs: multi-agent
+complexity only gets justified once this phase can point at something specific this
+one agent can't do — see Phase 12.
 
 Detailed milestones written when Phase 9 is complete.
 
@@ -618,12 +674,34 @@ Detailed milestones written when Phase 10 is complete.
 
 ## Phase 12 — LangGraph and Multi-Agent Systems
 
-**Goal:** graph-based agent workflows (state, nodes, edges, routing, checkpoints,
-persistence, human-in-the-loop). Researcher → Writer → Critic → Revision, then
-orchestrator-worker and parallel-worker patterns — only after establishing, concretely,
-why a single agent from Phase 10 was insufficient for the task at hand.
+**Real prerequisite is Phase 10, not Phase 11.** Multi-agent orchestration and
+MCP (tool exposure via a standard protocol) are independent capabilities — nothing
+about graph-based multi-agent workflows requires an MCP server to exist first. This
+phase can start as soon as Phase 10 has established, concretely, why a single agent
+was insufficient — Phase 11 can proceed in parallel or afterward, in either order.
 
-Detailed milestones written when Phase 11 is complete.
+**Goal:** graph-based agent workflows (state, nodes, edges, routing, checkpoints,
+persistence, human-in-the-loop) — concretely, an **Investigator/Reviewer** pattern
+built on `dispute-service`: an Investigator agent gathers evidence (retrieves the
+applicable scheme rule via Phase 8's RAG capability, checks the filing-deadline tool
+from Phase 10, assembles a recommended reason-code classification), and a separate
+Reviewer agent critiques that recommendation against the same retrieved evidence
+before it's presented for **human approval** — a real human-in-the-loop gate before
+any dispute decision is finalized, not an automated end-to-end pipeline. This is a
+direct instance of the general Researcher → Writer → Critic → Revision pattern this
+phase is built around, applied to a task where getting it wrong has real (if
+fictional, in this project) consequences — which is exactly the property that makes
+human-in-the-loop approval a genuine design requirement here rather than a checkbox.
+Then generalize: orchestrator-worker and parallel-worker patterns beyond this one
+example.
+
+**Explicitly required before claiming this phase teaches "multi-agent":** a single
+agent (Phase 10) must first be shown insufficient for this exact task, concretely
+(e.g., a single agent conflating "gather evidence" and "critique the evidence" in one
+undifferentiated pass, with no independent check before a human sees it) — not
+assumed insufficient because multi-agent sounds more sophisticated.
+
+Detailed milestones written when Phase 10 is complete.
 
 ---
 
