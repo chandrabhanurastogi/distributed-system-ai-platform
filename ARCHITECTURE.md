@@ -4,7 +4,7 @@ This document reflects the **current, actual state** of the system, verified aga
 repository — not the aspirational end state. It is updated every time a milestone changes
 a service boundary, API, database, topic, or consistency guarantee (see `CLAUDE.md` Rule 7).
 
-Last verified against repo: 2026-09-13, working tree (Milestone 0.2 changes staged,
+Last verified against repo: 2026-09-14, working tree (Milestone 0.3 changes staged,
 pending commit).
 
 ---
@@ -23,25 +23,48 @@ pending commit).
 
 | Service | Package | State |
 |---|---|---|
-| `order-service` | `com.distributedplatform.orderservice` | Boots. One `@SpringBootApplication` class. No controllers. Connects to its own Postgres via a `local`-profile datasource; no entities/persistence layer yet. |
-| `inventory-service` | `com.distributedplatform.inventoryservice` | Same shape as `order-service` — datasource wired, no entities yet. |
+| `order-service` | `com.distributedplatform.orderservice` | Boots. No controllers yet (Milestone 0.4). Persists `Order` (plain class, not a JPA entity — ADR-0004) to its own Postgres via a hand-written `OrderRepository` (`NamedParameterJdbcTemplate`). |
+| `inventory-service` | `com.distributedplatform.inventoryservice` | Same shape — persists `InventoryItemDto` to `inventory_items` via `InventoryItemRepository`, same plain-JDBC pattern. |
 
 Both currently ship `spring-boot-starter-web`, `spring-boot-starter-actuator`,
-`spring-boot-starter-jdbc`, `org.postgresql:postgresql` (runtime), `spring-kafka`, and
-Lombok, but **Kafka is still only a dependency — nothing uses it yet.** See
-`CLAUDE.md` → Known Existing Debt.
+`spring-boot-starter-jdbc`, `spring-boot-starter-flyway`, `flyway-database-postgresql`,
+`org.postgresql:postgresql` (runtime), `spring-kafka`, and Lombok, but **Kafka is still
+only a dependency — nothing uses it yet.** See `CLAUDE.md` → Known Existing Debt.
 
 ### Data
 
-Database-per-service is now wired, not just decided. Each service has its own
-`postgres:17-alpine` container (`order-db`, `inventory-db` — see Infrastructure below
-and ADR-0003) and its own `DataSource` bean, configured via a `local` Spring profile
-(`spring.profiles.default: local` in the base `application.yml`; connection details in
-`application-local.yml`, kept out of the unqualified file so Milestone 0.3's
-Testcontainers integration tests can supply a different URL without touching it).
+Database-per-service is wired *and* now actually holds data. Each service has its own
+`postgres:17-alpine` container (`order-db`, `inventory-db` — ADR-0003) and its own
+`DataSource` bean via a `local` Spring profile (connection details in
+`application-local.yml`, kept out of the unqualified `application.yml` specifically so
+Testcontainers can supply a different URL without touching it — exercised for real in
+Milestone 0.3).
 
-No entities, no migrations, no repository layer yet — the datasource exists, but
-nothing is persisted through it. That's Milestone 0.3.
+Schema is versioned with **Flyway** (`spring-boot-starter-flyway` +
+`flyway-database-postgresql` — Boot 4 moved Flyway's Spring wiring into its own module,
+and Flyway 10+ moved Postgres dialect support into its own module; both are required
+together, neither alone is sufficient). Each service has one migration:
+`V1__create_orders_table.sql` (`orders`: `id`, `status`, `created_at`) and
+`V1__create_inventory_items_table.sql` (`inventory_items`: `id`, `sku` [unique],
+`quantity`, `created_at`).
+
+Persistence is **plain JDBC, not JPA** (ADR-0004) — `NamedParameterJdbcTemplate` +
+hand-written `RowMapper`s, no ORM session. `Order` and `InventoryItemDto` are plain
+Lombok-`@Data` classes, not `@Entity`-annotated. Each repository has exactly two
+operations (`save`, `findById`), both single-statement and therefore already
+individually atomic — no method currently spans multiple statements, so no
+`@Transactional` boundary exists yet anywhere in the codebase. `findById` throws
+`EmptyResultDataAccessException` on a missing row rather than returning null/`Optional`
+— an open item, tracked in `CLAUDE.md` → Known Existing Debt, since it needs a real
+decision once Milestone 0.4 adds a `GET /orders/{id}` that has to turn "not found" into
+an HTTP 404.
+
+Round-trip correctness is proven by a Testcontainers-backed integration test per
+service (`OrderRepositoryTest`, `InventoryItemRepositoryTest`) — each spins up its own
+ephemeral `postgres:17-alpine` container via `@Testcontainers`/`@ServiceConnection`,
+runs the real `V1` migration against it from an empty schema, then exercises the
+repository. Verified independent of local dev infrastructure: the full suite passes
+with `order-db`/`inventory-db` stopped entirely.
 
 ### Communication
 
@@ -93,8 +116,8 @@ then, treat it as intent, not fact.
 
 | Service | Responsibility | Owned data | Introduced at | Status |
 |---|---|---|---|---|
-| `order-service` | Create/view orders; caller in resilience experiments | `orders` (own `postgres:alpine` container — ADR-0003) | Phase 0 | Datasource wired, no entities yet |
-| `inventory-service` | Track/reserve stock; downstream in resilience experiments | `inventory_items` (own `postgres:alpine` container — ADR-0003) | Phase 0 | Datasource wired, no entities yet |
+| `order-service` | Create/view orders; caller in resilience experiments | `orders` (own `postgres:alpine` container — ADR-0003) | Phase 0 | Persists via plain JDBC, no REST API yet |
+| `inventory-service` | Track/reserve stock; downstream in resilience experiments | `inventory_items` (own `postgres:alpine` container — ADR-0003) | Phase 0 | Persists via plain JDBC, no REST API yet |
 | `payment-service` | Third Saga participant; can succeed or fail to force compensation | `payments` (own DB) | Start of Phase 3 | Not created |
 | `notification-service` | Pure Kafka consumer, no other responsibility — kept deliberately "boring" so Phase 4 consumer-group experiments aren't confounded by unrelated logic | none (stateless relay, or a minimal delivery log) | Phase 3/4 boundary | Not created |
 | `shipping-service` | TBD | TBD | **Not scheduled** — see decision note below | Not created |
@@ -148,3 +171,4 @@ active, per `CLAUDE.md` Rule 5 (don't document what doesn't exist yet).
 | 2026-09-12 | Initial version. Documents the bare two-service Gradle skeleton as scaffolded; no architecture decisions beyond build tooling have been made yet. |
 | 2026-09-12 | §2 database-per-service decision resolved: Option A (one local `postgres:alpine` container per service). See ADR-0003. Two detours — managed cloud Postgres, and a shared instance with two logical databases — were considered and rejected along the way. |
 | 2026-09-13 | Milestone 0.2 complete: ADR-0003's Option A implemented and proven, not just decided. `docker/docker-compose.yml` brings up `order-db`/`inventory-db`; both services wired to their own Postgres via `spring-boot-starter-jdbc` and a `local` profile; `management.endpoint.health.show-details: always` makes the `db` sub-component visible. Failure/recovery scenario verified end-to-end, including the sub-component itself: stopping `order-db` alone flips only `order-service`'s `db` status to `DOWN` (and thus its aggregate status); restarting it recovers without an app restart; `inventory-service` unaffected throughout. |
+| 2026-09-14 | Milestone 0.3 complete: ADR-0004 (plain JDBC + Flyway, not JPA + Liquibase) implemented. Each service has one Flyway migration and a hand-written repository (`OrderRepository`, `InventoryItemRepository`) over `NamedParameterJdbcTemplate`. Round-trip correctness proven per service via a Testcontainers-backed integration test, verified to pass with local dev Postgres containers stopped entirely — genuine independence from `docker-compose`, not assumed. No REST API yet (Milestone 0.4); no transaction boundary exists yet since both repository operations are single-statement (tracked as a forward-looking gap for when a composite operation like stock reservation is introduced, and explicitly not solved by `@Transactional` alone — see `CLAUDE.md` → Known Existing Debt and Phase 1). |

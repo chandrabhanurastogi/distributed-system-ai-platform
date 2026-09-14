@@ -186,11 +186,13 @@ already-rejected isolation loss.
 
 ### Milestone 0.3 — First persistent domain slice
 
-- [ ] Flyway (or Liquibase — decide and record why) added to both services
-- [ ] First migration + entity per service: `Order` (`order-service`), `InventoryItem`
+**Status: Complete — 2026-09-14**
+
+- [x] Flyway (or Liquibase — decide and record why) added to both services
+- [x] First migration + entity per service: `Order` (`order-service`), `InventoryItem`
       (`inventory-service`) — minimal fields only, no business logic yet
-- [ ] Repository layer (Spring Data JPA or plain JDBC — decide and record why)
-- [ ] Testcontainers added; a repository-layer integration test boots a real Postgres
+- [x] Repository layer (Spring Data JPA or plain JDBC — decide and record why)
+- [x] Testcontainers added; a repository-layer integration test boots a real Postgres
       container, runs the migration, and proves a round-trip (save → read back)
 
 **Explicitly out of scope for 0.3:** no REST endpoints yet. This is "can we correctly
@@ -201,11 +203,87 @@ per service that fails if the migration or entity mapping is wrong, and passes
 otherwise. Test must not depend on a developer having Postgres running locally — it
 must stand up its own container.
 
-**Interview questions (answer before moving on):**
-- Why does the integration test start its own Postgres via Testcontainers instead of
-  pointing at the `docker-compose` instance from 0.2?
-- What's the difference between what 0.2's health check proves and what 0.3's
-  integration test proves?
+**Decision — resolved (ADR-0004):** plain JDBC (`NamedParameterJdbcTemplate`), not
+Spring Data JPA, and Flyway, not Liquibase. The JDBC-vs-JPA call was the substantive
+one: Phase 1 requires directly observing transaction isolation and row-level locking,
+which Hibernate's session cache and deferred-flush behavior would obscure. Explicitly
+scoped to the learning phases, not asserted as a permanent stance — full reasoning,
+including what production teams would correctly choose instead (JPA) and why, is in
+`ADR/0004-plain-jdbc-and-flyway.md`.
+
+**Verified 2026-09-14:** `./gradlew test` runs both services' Testcontainers-backed
+integration tests — each boots its own ephemeral `postgres:17-alpine`, applies the
+real `V1` migration from an empty schema (confirmed in logs, not assumed), and proves
+a save→read-back round trip. Re-verified with `order-db`/`inventory-db` stopped
+entirely — full suite still passes, proving genuine independence from local dev
+infrastructure rather than accidental reliance on it. `docker exec` + `psql` used
+throughout to independently confirm table structure and Flyway history rather than
+trusting "it worked" reports at face value — this milestone had more of those checks
+pay off than any prior one.
+
+**Bugs found and fixed along the way (kept here, not smoothed over, since each was a
+genuine root cause rather than a guess):**
+- Migration filename `V1_create_orders_table.sql` (single underscore) — Flyway's
+  naming convention requires a double underscore between version and description;
+  with only one, Flyway silently didn't recognize the file as a migration at all (no
+  error, just total silence).
+- Adding raw `flyway-core` was insufficient on Spring Boot 4: Boot 4 split its
+  monolithic `spring-boot-autoconfigure` jar into per-feature modules, and Flyway's
+  Spring wiring moved into its own `spring-boot-flyway` module (confirmed by directly
+  inspecting jar contents — `spring-boot-autoconfigure-4.1.1.jar` has zero
+  Flyway-related classes). Fixed via `spring-boot-starter-flyway`.
+- That alone still failed with `FlywayException: Unsupported Database: PostgreSQL
+  17.11` — a *second*, independent split: Flyway 10+ moved per-database dialect
+  support out of `flyway-core` into `flyway-database-*` modules. Needed
+  `flyway-database-postgresql` in addition to the Spring starter; the BOM managing a
+  version for an artifact is not the same thing as that artifact being pulled in
+  automatically — a real point of confusion surfaced and corrected in-session.
+- Testcontainers 2.x renamed every module with a `testcontainers-` prefix
+  (`org.testcontainers:junit-jupiter` → `org.testcontainers:testcontainers-junit-jupiter`,
+  same for `postgresql`) and moved `PostgreSQLContainer` out of
+  `org.testcontainers.containers` into `org.testcontainers.postgresql` (the old class
+  survives only as a deprecated compatibility shim). Confirmed by inspecting the
+  resolved `testcontainers-bom` POM directly rather than guessing from memory.
+- `inventory-service`'s first migration was a copy-paste of `order-service`'s shape
+  (`id`/`status`/`created_at`) under the wrong table name (`inventory` instead of the
+  already-documented `inventory_items`) and represented nothing about actual inventory
+  tracking. Caught before a repository was built on top of it; fixed via
+  `docker compose down -v inventory-db` (verified this scopes correctly to one
+  service's container and volume, leaving `order-db` completely untouched) and a
+  corrected migration (`sku` unique, `quantity`).
+- `InventoryItemRepository.save()` had a parameter-name/column mismatch
+  (`VALUES (:status, :sku, :createdAt)` against columns `sku, quantity, created_at`) —
+  another copy-paste artifact from `Order`, would have failed the instant it executed.
+- `InventoryItemRepositoryTest`'s two methods both hardcoded `sku = "testsku"`; since
+  `@Container` is `static`, both tests shared one Postgres instance, and the second
+  insert violated `inventory_items_sku_key`'s `UNIQUE` constraint. Fixed with a random
+  SKU per test invocation. Note: the identical latent risk exists in
+  `OrderRepositoryTest` too — it just hasn't surfaced because `orders` has no unique
+  constraint to violate.
+
+**Interview questions:** three rounds, all requiring a real answer before any reveal.
+Q1 (why Testcontainers instead of the `docker-compose` instance) was initially
+answered around data-safety/pollution risk — correct but incomplete, and included an
+imprecise "thread pool" resource-contention claim that didn't fit a project with no
+real user traffic. Tightened, with the human volunteering the correct reasoning once
+pointed at the actual migration log line: a persistent, already-migrated database
+would never re-validate that the migration file itself is correct, only that the
+repository code works against whatever shape that database currently happens to have.
+Q2 (transactional gap in `save`/`findById`) correctly concluded no `@Transactional`
+belongs on the *existing* methods, and correctly named stock reservation
+(read-then-write) as the operation that will eventually need one — but initially
+justified the current lack of a boundary as "these methods don't need ACID," which is
+imprecise (every single statement already gets full ACID from Postgres by default;
+the real reason is that a single statement has nothing left to compose). Also
+surfaced, and deliberately left as a forward pointer rather than solved now: even a
+correct `@Transactional` boundary around a future `reserveStock` would **not** by
+itself prevent a concurrent lost-update/overselling race — that requires explicit
+locking or isolation-level reasoning, i.e., Phase 1's actual subject matter. Q3 (why
+the Spring Boot BOM didn't catch the Testcontainers artifact rename) correctly
+identified the mechanism unprompted — a BOM is an exact-coordinate lookup table with
+no aliasing or rename history, so a renamed artifact simply isn't a key in it anymore,
+which is categorically different from a version *conflict* (where the coordinate
+exists but multiple sources disagree on which version).
 
 ---
 

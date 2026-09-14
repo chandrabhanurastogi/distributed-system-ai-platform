@@ -105,3 +105,20 @@ assistant:
   no producer/consumer wired yet. This was a scaffolding artifact, not a decision. It
   should be consciously activated (or removed and re-added) at the start of Phase 3/4,
   not left to just "already be there" when Kafka is introduced.
+- `OrderRepository.findById` and `InventoryItemRepository.findById` (Milestone 0.3)
+  throw `EmptyResultDataAccessException` on a missing row rather than returning
+  `null`/`Optional`. Fine today since nothing calls them except tests. Needs a real
+  decision once Milestone 0.4 adds `GET /orders/{id}` / inventory lookup endpoints and
+  "not found" has to become an HTTP 404 — decide deliberately at that point, don't let
+  the exception silently propagate to a 500 by default.
+- No method in either repository currently spans multiple SQL statements, so no
+  `@Transactional` boundary exists anywhere in the codebase yet — both `save` and
+  `findById` are single statements, already atomic without one. The first real gap
+  will appear the moment a composite operation is added (the obvious candidate:
+  `inventory-service` reserving stock — a read-then-conditional-write). Confirmed in
+  Milestone 0.3's interview that `@Transactional` alone would **not** fully solve that
+  case even then — it prevents your own statements from being interleaved with
+  themselves, but not the classic concurrent lost-update/overselling race, which needs
+  explicit locking or isolation-level reasoning. That's Phase 1's actual subject matter
+  (optimistic vs. pessimistic locking, race conditions) — don't reach for
+  `@Transactional` alone as if it already solves it when reservation is implemented.
