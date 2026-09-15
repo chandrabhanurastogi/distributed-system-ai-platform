@@ -43,6 +43,19 @@ not Phase 11's — its real dependency is having a single-agent baseline to prov
 insufficient (Phase 10), not MCP. Sequenced directly after Phase 10; Phase 11 (MCP)
 can proceed independently, in either order.
 
+**Concrete execution order, decided 2026-09-14:** Phase 6 → Phase 7 → Phase 1 → Phase
+2 → Phase 8 (RAG) → Phase 10 (Agents). Phase 10's actual gate (Milestone 0.4) is
+already satisfied, so nothing here is a hard dependency — Phase 1/2 are placed before
+Phase 8/10 by choice, not requirement, for two reasons: (1) Phase 1 and 2 have zero
+dependency in either direction on Phase 6/7/8, so there's no technical pressure ever
+forcing a return to them, which is exactly the condition under which one track quietly
+never gets revisited — naming a concrete return point now is the deliberate fix for
+that; (2) Phase 10's agent guardrails (tool failures, timeouts) are a stronger,
+more realistic story once `order-service`/`inventory-service` already have real
+timeout/retry/circuit-breaker behavior (Phase 2) underneath them, rather than wrapping
+bare, unprotected REST calls. Phase 3–5 and Phase 12 are not placed in this ordering
+yet — where they land is still open.
+
 **Domain grounding for the AI-specific work:** Phase 8, 10, and 12 are all grounded in
 one new fictional service, `dispute-service` (introduced at Phase 8 — see its own
 section below), modeling public, standard payment-industry concepts (chargebacks,
