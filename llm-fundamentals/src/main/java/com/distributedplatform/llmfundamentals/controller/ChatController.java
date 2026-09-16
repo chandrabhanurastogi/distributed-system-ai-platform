@@ -31,6 +31,18 @@ public class ChatController {
         return "Error: No response received from the model.";
     }
 
+    @PostMapping("/chat/weather")
+    public String chatWithWeather(@RequestBody String prompt) {
+        List<Message> messages = List.of(new Message("user", prompt));
+        OllamaResponse response = ollamaChatService.chatWithWeatherTool("llama3.2", messages);
+
+        if (response != null && response.getMessage() != null) {
+            return response.getMessage().getContent();
+        }
+
+        return "Error: No response received from the model.";
+    }
+
     @PostMapping("/extract-person")
     public ExtractedPerson extractPerson(@RequestBody String text) {
         Map<String, Object> schema = Map.of(

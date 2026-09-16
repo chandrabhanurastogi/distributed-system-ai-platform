@@ -735,6 +735,129 @@ Detailed milestones for the rest of Phase 6 (tool-calling mechanics, the
 `LlmClient`-interface milestone, the hosted-provider switch) written when the next
 piece of Phase 6 is actually started, per `CLAUDE.md` Rule 5.
 
+### Milestone 6.2 — Tool-calling mechanics against Ollama
+
+**Status: Complete — 2026-09-16**
+
+**Sequencing note:** tool-calling is learned raw, against Ollama directly, same as
+structured output was in 6.1 — the `LlmClient` interface (Milestone 6.3) comes after,
+justified by an actual second provider to switch to, not built speculatively now.
+
+- [x] Describe one real tool to the model in its request (a schema Ollama's chat API
+      expects — e.g. a trivial `get_weather(city: string)` function), with a prompt
+      that should trigger a tool call rather than a prose reply
+- [x] Parse the model's tool-call response (name + arguments) — this is a *third*
+      distinct thing `message.content`-shaped data can mean, after plain prose
+      (Milestone 6.1) and schema-constrained JSON (Milestone 6.1) — confirm Ollama's
+      actual response shape for a tool call directly rather than assume it matches
+      either of those
+- [x] Actually execute the requested function and feed its result back into the
+      conversation as a new message — Ollama's chat template already showed a `tool`/
+      `ipython` role branch for exactly this (seen when inspecting `llama3.2`'s
+      template in Milestone 6.1); confirm this is really how the round trip works,
+      don't assume from the template alone
+- [x] Get the model's final natural-language answer incorporating the tool's result
+- [x] A REST endpoint to manually trigger and inspect the full round trip via `curl`
+- [x] Tests proving: a well-formed tool call is produced for a prompt that should
+      trigger one; the full loop (call → execute → feed back → final answer) works
+      end-to-end against real Ollama
+
+**Deliberate, corrected-basis decision (2026-09-16):** `llama3.2` (3B, chosen for
+speed in Milestone 6.1) has a known reputation for weaker tool-calling reliability
+than larger or function-calling-tuned models. Rather than a separate throwaway
+empirical probe first, the milestone's own tests double as the real check — and
+whatever they show gets reported honestly, including if the model turns out
+unreliable at this. This was reached only after correcting an initial, inaccurate
+justification ("the LLM is assumed tested, like real IT companies do") — real
+practice is the opposite: a model provider testing general capability says nothing
+about whether *this* specific tool schema and prompt combination works reliably, which
+is exactly why this project's own Phase 13 (Evals) measures tool-usage accuracy rather
+than assuming it. The corrected, legitimate version of "move fast" is "test for real,
+immediately, and report what's actually found" — not "assume it's fine because it's
+someone else's job to have tested it."
+
+**Explicitly out of scope for 6.2:** no `LlmClient` interface, no second provider, no
+multi-tool or parallel tool calls (one tool, one round trip, understood completely,
+before any of that).
+
+**Verified 2026-09-16:** `./gradlew clean test` green across all four modules. Full
+round trip proven both by automated tests against real Ollama and independently by
+hand via `curl` — user question → model requests `get_weather` → fake function
+executes → result fed back as `role: "tool"` → real final answer ("The current weather
+in Paris is sunny, with a temperature of 22 degrees Celsius (72 degrees Fahrenheit)"
+— the model converted units unprompted, a good sign of genuine reasoning over the
+tool result rather than echoing it). Two real structural facts confirmed directly,
+not assumed: `message.tool_calls[].function.arguments` arrives as a genuine nested
+JSON object (unlike structured output's stringified `content`), and a tool result is
+fed back as a new message with `role: "tool"`, verified via a hand-crafted `curl` call
+before any code was written around it.
+
+**Empirical reliability result (the actual point of the corrected-basis decision):**
+`llama3.2` produced correctly-formed tool calls — right function name, correctly-typed
+arguments — in every test run this milestone. One real, if narrow, data point: not a
+benchmark, not a claim about tool-calling reliability in general, just an honest
+report of what was actually observed for this one tool and this one class of prompt.
+
+**Gap found during this milestone's own DoD walkthrough, closed before completion:**
+`OllamaChatService`'s tool-dispatch loop only recognized `"get_weather"` by name — not
+a live bug (it's the only tool that exists), but a real, untested failure path: an
+unrecognized tool name would have silently produced no result message, leaving the
+model waiting on a call that never gets answered. Refactored into `executeToolCall`
+with an explicit error-result branch for unknown tools, and covered by a genuine unit
+test (`OllamaChatServiceToolDispatchTest` — no Spring context, no real Ollama call,
+hand-built `ToolCall` fixtures) proving both the known-tool and unknown-tool paths.
+This also closed the milestone's other honest gap: every other test in this phase has
+been integration-style against real Ollama, with zero pure unit coverage of the
+branching logic itself.
+
+**Two clarifications surfaced by real confusion, worth recording:**
+- **This is not MCP.** Tool-calling is a feature of the chat API itself — one request,
+  one model, your code executes the function directly. MCP (Phase 11) is a separate
+  client-server protocol with its own transport and capability negotiation; it would
+  *use* tool-calling as its underlying mechanism, but isn't the same thing, the same
+  way one HTTP request isn't "REST."
+- **A request to use Spring AI's `@Tool` annotation here was named as a direct
+  conflict with Phase 6's raw-before-abstraction design and deferred**, the same
+  pattern as the pessimistic-locking conflict in Milestone 0.4 (ADR-0005) — a
+  reasonable-sounding instinct that would have skipped the exact mechanics this
+  milestone exists to teach. Consciously deferred to Milestone 6.3, not silently
+  ignored or silently complied with.
+
+**Interview:** substantial organic correction also happened during implementation
+itself, worth recording alongside the formal round rather than instead of it — the
+tools/tool_calls/function terminology needed a full concrete walkthrough before it
+landed, the MCP conflation was caught and corrected, and the "LLM is assumed tested"
+justification was named as factually wrong before the corrected decision was
+accepted. The formal closing round: Q1 (why `arguments` arrives as a real object
+while structured output's `content` arrives as a string) was first answered by
+explaining why `content` is *empty* during a tool call — a true but different fact,
+answering "why is content empty" instead of "why is arguments already parsed";
+redirected to the actual mechanical distinction: structured output never leaves "raw
+model-generated text" territory (just text shaped to look like JSON), while
+tool-calling involves Ollama's own server-side code recognizing and extracting the
+model's tool-call signal into a real object before it reaches the caller — correctly
+landed on the second attempt. Q2 (does one passing test prove reliability) correctly
+rejected the premise — one test isn't a reliability claim — and correctly identified
+that repeated testing is what would establish it, real growth from this same
+milestone's earlier "the LLM is assumed tested" starting position; sharpened with two
+precision points: repetition matters specifically because generation is
+non-deterministic (identical input can produce a different output on a different
+run), and the actual measurement is a success *rate* over varied prompts/scenarios,
+not the identical single case repeated — exactly the shape of metric Phase 13 (Evals)
+already names (tool selection accuracy, argument accuracy, execution success rate).
+
+Detailed milestones for Milestone 6.3 written now that 6.2 is verified done.
+
+### Milestone 6.3 — `LlmClient` interface + real hosted provider (sketched)
+
+Introduce a minimal `LlmClient` interface once 6.2 is done, with `OllamaLlmClient`
+(retrofitting 6.1/6.2's code behind it) and a second, real implementation for a paid
+hosted provider (Anthropic or OpenAI — provider TBD, decided when this milestone
+starts), selected via a config flag. Justified by an actual second implementation to
+switch between, not spun up speculatively — same reasoning as ADR-0006's bar for
+`common`, applied to an interface instead of a shared module. Full task breakdown
+written when Milestone 6.2 is complete, per `CLAUDE.md` Rule 5.
+
 ---
 
 ## Phase 7 — Vector and Retrieval Foundations
