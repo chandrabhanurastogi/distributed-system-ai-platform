@@ -1,4 +1,4 @@
-package com.distributedplatform.orderservice.logging;
+package com.distributedplatform.common.logging;
 
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
@@ -8,12 +8,10 @@ import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.MDC;
-import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.util.UUID;
 
-@Component
 public class CorrelationIdFilter implements Filter {
 
     public static final String CORRELATION_ID_HEADER = "X-Correlation-Id";

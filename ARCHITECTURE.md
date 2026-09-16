@@ -4,8 +4,9 @@ This document reflects the **current, actual state** of the system, verified aga
 repository — not the aspirational end state. It is updated every time a milestone changes
 a service boundary, API, database, topic, or consistency guarantee (see `CLAUDE.md` Rule 7).
 
-Last verified against repo: 2026-09-14, working tree (Milestone 0.4 changes staged,
-pending commit). Phase 0 is complete as of this milestone.
+Last verified against repo: 2026-09-16, working tree (Milestone 6.1 changes in
+progress). Phase 0 is complete; Phase 6 (Track B, AI Foundations) is in progress in
+parallel with Track A per the two-track decision in `ROADMAP.md`.
 
 ---
 
@@ -18,18 +19,53 @@ pending commit). Phase 0 is complete as of this milestone.
   machine via the `foojay-resolver-convention` plugin (no manual JDK install required).
 - Spring Boot 4.1.1 / Spring Dependency Management plugin 1.1.7, applied once in the root
   `build.gradle`'s `subprojects {}` block so per-module `build.gradle` files stay minimal.
+- Four Gradle modules as of Milestone 6.1: `order-service`, `inventory-service`,
+  `llm-fundamentals`, and `common`. `common` is the exception to "every subproject is a
+  Spring Boot application" — it has no main class, `bootJar` is disabled and plain
+  `jar` enabled instead (ADR-0006); it exists to be depended on, not run.
 
 ### Services
 
 | Service | Package | State |
 |---|---|---|
-| `order-service` | `com.distributedplatform.orderservice` | `POST /orders`, `GET /orders/{id}` (404 on miss). Controller → Service → Repository. Persists `Order` (plain class, not a JPA entity — ADR-0004) via `OrderRepository` (`NamedParameterJdbcTemplate`). |
-| `inventory-service` | `com.distributedplatform.inventoryservice` | `GET /inventory/{sku}` (404 on miss), `POST /inventory/{sku}/reserve` (200, 409 on insufficient stock, 400 on invalid quantity). Same layering; `InventoryService.reserve` is the first `@Transactional` method in the codebase — see Data section below for a known, deliberate limitation of that boundary. |
+| `order-service` | `com.distributedplatform.orderservice` | `POST /orders`, `GET /orders/{id}` (404 on miss). Controller → Service → Repository. Persists `Order` (plain class, not a JPA entity — ADR-0004) via `OrderRepository` (`NamedParameterJdbcTemplate`). Also ships `springdoc-openapi-starter-webmvc-ui` for interactive API exploration (not BOM-managed — a genuine third-party dependency, correctly version-pinned). |
+| `inventory-service` | `com.distributedplatform.inventoryservice` | `GET /inventory/{sku}` (404 on miss), `POST /inventory/{sku}/reserve` (200, 409 on insufficient stock, 400 on invalid quantity). Same layering; `InventoryService.reserve` is the first `@Transactional` method in the codebase — see Data section below for a known, deliberate limitation of that boundary. Also ships `springdoc-openapi-starter-webmvc-ui`, same reason as `order-service`. |
+| `llm-fundamentals` | `com.distributedplatform.llmfundamentals` | New in Milestone 6.1 (Phase 6, Track B). Direct, un-abstracted calls to a local Ollama instance — no `LlmClient` interface yet, deliberately (see `ROADMAP.md` Phase 6 sequencing decision). `POST /chat` (multi-turn, caller supplies full history), `POST /extract-person` (schema-constrained structured output via Ollama's `format` field, demonstrating the two-parse mechanic: the response envelope is parsed automatically, but its `message.content` string is itself JSON requiring an explicit second `ObjectMapper` parse into the target type). |
 
-Both currently ship `spring-boot-starter-web`, `spring-boot-starter-actuator`,
-`spring-boot-starter-jdbc`, `spring-boot-starter-flyway`, `flyway-database-postgresql`,
-`org.postgresql:postgresql` (runtime), `spring-kafka`, and Lombok, but **Kafka is still
-only a dependency — nothing uses it yet.** See `CLAUDE.md` → Known Existing Debt.
+Both `order-service`/`inventory-service` ship `spring-boot-starter-web`,
+`spring-boot-starter-actuator`, `spring-boot-starter-jdbc`, `spring-boot-starter-flyway`,
+`flyway-database-postgresql`, `org.postgresql:postgresql` (runtime), `spring-kafka`,
+and Lombok, but **Kafka is still only a dependency — nothing uses it yet.** See
+`CLAUDE.md` → Known Existing Debt. `llm-fundamentals` does not depend on any of the
+Postgres/Flyway stack — it's Track B, independent of the distributed-systems backbone.
+
+### Shared infrastructure (`common` module, ADR-0006)
+
+Introduced when a third module (`llm-fundamentals`) needed the same
+`CorrelationIdFilter` already duplicated between `order-service` and
+`inventory-service` — two duplicates were correctly judged insufficient to justify a
+shared module in Milestone 0.4; a third real instance made the need concrete rather
+than speculative. `common` exposes `CorrelationIdFilter` via a proper Spring Boot
+auto-configuration (`LoggingAutoConfiguration`, registered through
+`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`) —
+required because `com.distributedplatform.common` sits outside every consuming
+service's own package hierarchy, so default component scanning would never find it
+otherwise. This is the same mechanism (Flyway's Spring wiring, `@AutoConfigureMockMvc`,
+`@AutoConfigureTestRestTemplate`) this project spent Milestones 0.3/0.4/6.1 learning
+about as a consumer — this is the first place it's been built, not just relied upon.
+Scope is deliberately narrow: only genuinely cross-cutting, domain-free infrastructure
+belongs here, gated by actual repeated need (3+ real instances), not speculation.
+
+`common` also now holds `ErrorResponse` (`com.distributedplatform.common.web`) — a
+one-field `record ErrorResponse(String error)` used by all three services'
+`@RestControllerAdvice` classes, replacing what used to be plain-string error bodies.
+This is the same 3x-repeated-need bar that justified `common` in the first place,
+applied a second time rather than assumed to apply automatically to everything.
+`llm-fundamentals` gained a `GlobalExceptionHandler` for the first time here too,
+mapping `RestClientException` (Ollama unreachable) to a `503` — verified for real by
+pointing the service at a genuinely unreachable address and confirming a proper JSON
+`503`, not an unhandled `500`. This closes the failure-scenario gap flagged as open at
+the end of Milestone 6.1's Definition of Done walkthrough.
 
 ### Data
 
@@ -186,9 +222,14 @@ slot in a shared one.
 
 ## 4. AI Components
 
-None yet. Phases 6–14 introduce Spring AI, RAG, GraphRAG, agents, MCP, and multi-agent
-orchestration on top of this platform — this section stays empty until those phases are
-active, per `CLAUDE.md` Rule 5 (don't document what doesn't exist yet).
+Phase 6 is active (`llm-fundamentals` module) — real content now exists here per Rule 7,
+though still narrow. Direct HTTP calls to a local Ollama instance (`llama3.2`), no
+framework abstraction (no Spring AI, no `LlmClient` interface — deliberate, see
+`ROADMAP.md` Phase 6). Multi-turn conversation (caller-managed history, no server-side
+session), real token/usage accounting from Ollama's own response fields (not
+estimated), and schema-constrained structured output. No RAG, no agents, no MCP, no
+multi-agent orchestration yet — those remain empty until their phases are active, per
+Rule 5.
 
 ---
 
@@ -203,3 +244,4 @@ active, per `CLAUDE.md` Rule 5 (don't document what doesn't exist yet).
 | 2026-09-14 | §2 target topology extended: `dispute-service` added (Phase 8), driven by the human's active Senior AI Engineer interview timeline — see `ROADMAP.md`'s two-track decision. Phase 6/7/8 (AI foundations) unlocked to run in parallel with the distributed-systems track rather than waiting for Phase 5, since none of them depend on it; Phase 10 (Agents) stays gated on the real backbone since its entire premise requires genuinely real tool-calling targets. `dispute-service` models public, standard payment-industry concepts (chargebacks, scheme rules) — a deliberate choice, not modeled on any specific employer's actual internal systems despite the human's professional background in the space. |
 | 2026-09-14 | Milestone 0.4 complete — **Phase 0 complete.** Both services gained a real REST API (Controller → Service → Repository), domain exceptions mapped to HTTP status (404/409/400) via `@RestControllerAdvice`, and structured JSON request logging with a propagating correlation ID (Spring Boot 4's native `logging.structured.format.console: logstash`, no new dependency). `InventoryService.reserve` is the first `@Transactional` method in the codebase and carries a known, deliberate lost-update race (ADR-0005) — left in on purpose as a real baseline for Phase 1's concurrency experiment, not fixed prematurely; this was tested for real when the human asked to fix it immediately during the milestone's interview and chose to stay on plan once the conflict was named. |
 | 2026-09-14 | AI curriculum revised a second time. Phase 12 (multi-agent) confirmed in scope, resequenced to depend on Phase 10 directly rather than Phase 11 (MCP) — no real dependency between multi-agent orchestration and MCP exists. `dispute-service`'s scope consolidated: a proposed standalone service for scheme/interchange-rule configuration (named after a specific employer's actual internal system) was rejected — folded into `dispute-service`'s existing RAG corpus as a second document category instead, avoiding both the reused proprietary name and an architecturally-unjustified second service. Phase 8's claim-classification task now explicitly excludes filing-deadline checking (moved to Phase 10 as a deterministic tool, not an LLM/RAG reasoning task) and explicitly excludes OCR/multimodal receipt processing (out of the two chosen AI capabilities' scope). Phase 12 reframed around a concrete Investigator/Reviewer pattern on `dispute-service` with a human-approval gate. Clarified: this project is practice material for defending real production work done elsewhere, not itself the subject of any resume/interview claim. |
+| 2026-09-16 | Phase 6 started (Milestone 6.1): new `llm-fundamentals` module makes direct, un-abstracted calls to a local Ollama instance — chat (single- and multi-turn, history proven via a real two-call test), real token/usage accounting, and schema-constrained structured output. New `common` module (ADR-0006) extracts `CorrelationIdFilter` — previously duplicated between `order-service`/`inventory-service` — via a proper Spring Boot auto-configuration, once a third module needed it. `springdoc-openapi-starter-webmvc-ui` added to `order-service`/`inventory-service` for interactive API exploration. Phase 14 (new) added to the roadmap: AI Governance and Compliance Observability, sequenced after Evals, before the (renumbered) Phase 15 capstone — sketched only, not detailed, pending an explicit decision on Datadog cost/tier. |

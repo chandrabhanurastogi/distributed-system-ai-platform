@@ -82,6 +82,29 @@ actually built where it was actually built — this project earning you fluency 
 concept is not the same claim as this project having shipped that concept in
 production, and the two must not be conflated in outward-facing material.
 
+**Cross-cutting concern, not a phase: hallucination mitigation (noted 2026-09-15).**
+There is deliberately no dedicated "handling hallucinations" milestone — it isn't one
+technique learned once, it's a property actively designed against at every layer, and
+naming it as a single phase would misrepresent how it actually works. Where it
+actually lives, so this isn't lost as an unstated assumption:
+- **Phase 6:** structured output constrains the model to a schema instead of
+  free-form generation — less room to fabricate the *shape* of an answer.
+- **Phase 8 (RAG):** grounding generation in retrieved documents — the classic
+  mitigation, but only one layer among several, not the whole story.
+- **Phase 10 (Agents):** the filing-deadline tool is itself a hallucination-prevention
+  technique — delegate anything an LLM might guess wrong (date arithmetic) to a
+  deterministic function it calls, rather than letting it reason about the answer.
+- **Phase 12 (multi-agent):** the Reviewer agent independently checking the
+  Investigator's conclusion, plus the human-approval gate, is a structural check
+  against trusting one model's confident-but-wrong output on the first pass.
+- **Phase 13 (Evals):** measuring the actual hallucination rate honestly, never
+  assuming zero — the same discipline behind rejecting "eliminating hallucinations"
+  as resume language earlier in this project's history. Same principle, two contexts.
+
+The interview-ready version of this story is the whole chain (grounding + structured
+output + deterministic delegation + independent review + honest measurement), not any
+one technique in isolation — naming only "I did RAG" would be the weaker answer.
+
 ---
 
 ## Phase 0 — Engineering Foundation
@@ -563,6 +586,8 @@ Detailed milestones written when Phase 4 is complete.
 
 ## Phase 6 — Spring AI and LLM Foundations
 
+**Status: In progress — started 2026-09-15**
+
 **Track B — unlocked, no dependency on Track A.** Can start now, in parallel with
 Phase 0/1, per the two-track decision above.
 
@@ -570,7 +595,145 @@ Phase 0/1, per the two-track decision above.
 context windows, temperature, structured output, tool calling) *before* Spring AI
 abstractions — the fundamentals must not be hidden behind a framework on day one.
 
-Detailed milestones written when this phase is actually started.
+**Provider decision (2026-09-15):** start against a **local Ollama instance**, not a
+paid hosted provider — no API key, no per-call cost, unblocking unlimited
+experimentation while concepts are still being learned. Neither a Claude Pro nor a
+Gemini Advanced/Pro *subscription* covers API usage; those are separate consumer
+products from the pay-per-token API accounts Spring AI would call, confirmed before
+this decision was made rather than assumed. Switch to a real hosted provider
+(Anthropic or OpenAI) once comfortable — tracked as its own later milestone in this
+phase, not deferred indefinitely.
+
+**Sequencing decision, the one worth not forgetting (2026-09-15):** build raw,
+Ollama-specific code first — hand-constructed JSON request/response shapes, zero
+abstraction, no `LlmClient` interface yet. Only *after* multi-turn history, tokens,
+and structured output are genuinely understood does introducing an `LlmClient`
+interface (with `OllamaLlmClient` now, `AnthropicLlmClient`/similar later, selected via
+a config flag) become its own deliberate milestone. Building the interface first would
+quietly defeat this phase's actual point — a home-rolled abstraction hides the same
+raw mechanics a framework's abstraction would, just earlier and with extra steps. See
+this same session's reasoning: the interface is worth building because it teaches
+*why* Spring AI's abstraction looks the way it does, which only lands if the raw
+mechanics were seen first.
+
+**New module:** `llm-fundamentals` — kept separate from `order-service`/
+`inventory-service`, since this is exploratory, pre-abstraction learning work, not
+part of the payments domain those services model.
+
+**Testing strategy decision (2026-09-15):** integration tests may hit the real local
+Ollama server directly (free, no cost, no non-determinism concern beyond the model's
+own sampling) — but this is a real environment prerequisite, the same category as
+Testcontainers needing Docker: Ollama must actually be installed, running, and have
+the model pulled, or these tests fail for infrastructure reasons, not code reasons.
+Once a real hosted provider is introduced later in this phase, its calls get mocked in
+tests — a paid, non-free, non-deterministic external dependency should not run on
+every `./gradlew test`.
+
+**Environment, verified 2026-09-15:** Ollama installed via `brew install --cask
+ollama-app` (0.34.0), server started via `ollama serve`, `llama3.2` pulled (chosen for
+speed over capability at this stage — mechanics, not quality, is the point). Verified
+with a real chat completion call against `http://localhost:11434/api/chat` before any
+application code was written — response included real `prompt_eval_count`,
+`eval_count`, and duration fields, which is exactly the real, measurable data this
+phase's "what will we measure" question was looking for, not a fabricated placeholder.
+
+### Milestone 6.1 — Raw chat completion mechanics against Ollama
+
+**Status: Complete — 2026-09-16**
+
+- [x] New `llm-fundamentals` Gradle module, wired into `settings.gradle`
+- [x] Hand-constructed HTTP call to Ollama's `/api/chat` endpoint (no abstraction, no
+      interface) — a plain Java class building the exact JSON Ollama expects
+- [x] Multi-turn conversation: prove that history is actually resent every turn (not
+      assumed) — a test that inspects the outgoing request body across two calls and
+      confirms the second includes the first turn's messages
+- [x] Token/usage accounting: capture and assert on the real `prompt_eval_count`/
+      `eval_count` fields Ollama returns — real numbers, not estimated
+- [x] Structured output: a request that constrains the response to a JSON schema,
+      deserialized into a typed Java object — not string-parsed
+- [x] A small REST endpoint (`POST /chat`) to manually trigger a call and inspect the
+      real request/response shape via `curl`, matching this project's established
+      verify-via-curl pattern
+- [x] Integration test(s) hitting the real local Ollama server (per the testing
+      strategy decision above)
+
+**Explicitly out of scope for 6.1:** no `LlmClient` interface, no second provider, no
+tool-calling yet (tool-calling's mechanics are enough of their own topic to earn a
+separate milestone within this phase, written when 6.1 is done).
+
+**Grew beyond the original checklist, for good reason:** a third module needing
+`CorrelationIdFilter` triggered ADR-0006 (shared `common` module, built via a real
+Spring Boot auto-configuration — the first one this project has authored rather than
+just consumed). Reviewing the new per-service `README.md` files then surfaced real
+documentation drift (error responses documented as JSON but actually returned as
+plain strings) which led to a genuine API-design decision: a shared `ErrorResponse`
+DTO across all three services, which in turn closed Milestone 6.1's previously-open
+failure-scenario gap (`llm-fundamentals` had zero handling for Ollama being
+unreachable) with a real, verified test — pointing the service at a genuinely
+unreachable address and confirming a proper `503` JSON body, not an unhandled `500`.
+
+**Verified 2026-09-16:** `./gradlew clean test` green across all four modules
+(`order-service`, `inventory-service`, `llm-fundamentals`, `common`). Manually verified
+against real, running instances (not just the test suite): single-turn and multi-turn
+`/chat` against real Ollama; `/extract-person` returning a genuinely typed,
+schema-constrained object (`{"name":"Maria","age":42}` from free text); real
+`prompt_eval_count`/`eval_count` values captured from actual Ollama responses (33
+prompt tokens for a 7-word input, traced to Ollama's chat template injecting a default
+system preamble and structural role tokens — confirmed directly via `ollama show
+llama3.2 --template`, not assumed); all four `order-service`/`inventory-service` error
+paths (404/409/400) now returning genuine `{"error": "..."}` JSON, verified via
+`curl`, not just code review; `llm-fundamentals`'s new `503` failure path verified by
+actually pointing `ollama.base-url` at an unreachable port and confirming the real
+response.
+
+**Bugs found and fixed (same discipline as every prior milestone — root-caused, not
+guessed):**
+- `OllamaRequest`'s `model` field was initially named `request` — serialized under the
+  wrong JSON key, Ollama had no idea what `"request"` meant. A value-correct,
+  key-wrong bug, same category as Milestone 0.3's `save()` parameter mismatch.
+- Hardcoded model name `"llama3"` when only `llama3.2` was ever pulled — confirmed via
+  `ollama list` before asserting, not from memory.
+- `ChatControllerTest`'s original draft had `@SpringBootTest` without
+  `webEnvironment = RANDOM_PORT` (no real server started), then — once fixed — hit two
+  more Boot 4 module-split surprises: `TestRestTemplate` requires an explicit
+  `@AutoConfigureTestRestTemplate` annotation now (confirmed by finding its
+  autoconfiguration is only reachable through that annotation's own empty-otherwise
+  `.imports` file), and `RestTemplateBuilder` moved into its own `spring-boot-restclient`
+  module, separate from where `RestClient` (used by the actual application code) lives.
+- Turn 1's assertion compared a `Message` object to a `String` literal (type mismatch,
+  could never pass) and, separately, the test's final assertion checked `turn1Response`
+  a second time instead of `turn2Response` — meaning the test, as first written, never
+  actually exercised the claim it was supposed to prove.
+- Mid-refactor, `OllamaChatService.chat(...)` (the simple, non-structured method) was
+  accidentally deleted while adding `chatStructured(...)` — caught because the
+  already-existing `OllamaChatServiceTest` still referenced it and wouldn't compile;
+  restored alongside the new generic method rather than one replacing the other.
+- `springdoc-openapi-starter-webmvc-ui` was added to the *global* `subprojects{}`
+  block without a stated reason — moved to just `order-service`/`inventory-service`
+  once the actual reason (interactive endpoint testing) was named.
+- New per-service `README.md` files documented JSON error bodies
+  (`{"error": "..."}`) that didn't match the actual plain-string responses being
+  returned at the time — caught by curling the real endpoints rather than trusting the
+  docs, and resolved by fixing the code (the `ErrorResponse` DTO) rather than just the
+  docs, since the JSON shape was the better design regardless of which was "wrong."
+
+**Interview:** two rounds, both requiring more than one pass. Q1 (why
+`@AutoConfiguration` doesn't depend on package location) initially answered as "makes
+it part of Spring scanning from the parent module" — a real conceptual error, since
+auto-configuration and component scanning are different mechanisms, not one extending
+the other; tightened across two attempts to the correct distinction: component
+scanning discovers classes by walking a package tree, auto-configuration loads classes
+by explicit fully-qualified name from a `.imports` manifest, so there's no tree to
+walk and therefore no package boundary to be blocked by. Q2 (`@ConditionalOnMissingBean`
+semantics) reached the right outcome (a user-defined bean takes precedence) but with
+two imprecisions worth naming: the check is by *type* (inferred from the bean method's
+return type), not "name or type" as first stated; and the auto-configured bean is
+never instantiated at all when the condition fails, not "overridden" after being
+created — a real distinction for reasoning about constructor side effects.
+
+Detailed milestones for the rest of Phase 6 (tool-calling mechanics, the
+`LlmClient`-interface milestone, the hosted-provider switch) written when the next
+piece of Phase 6 is actually started, per `CLAUDE.md` Rule 5.
 
 ---
 
@@ -731,16 +894,61 @@ Detailed milestones written when Phase 12 is complete.
 
 ---
 
-## Phase 14 — Production-Grade Capstone
+## Phase 14 — AI Governance and Compliance Observability
 
-**Goal:** the full system — `Client → API → Order → Inventory → Payment → Kafka →
-Notification`, plus the AI layer (RAG/GraphRAG/Agents/MCP/Tools) — as one coherent,
-production-oriented system. Final architecture is derived from what Phases 0–13 actually
-showed worked, not assumed now. Security, configuration, observability, resilience,
-schema evolution, idempotency, data consistency, deployment, load testing, failure
-testing.
+**Added 2026-09-16, at the human's request, after Milestone 6.1 surfaced a real need**
+(token/cost accounting per request) that pointed at a genuine gap: nothing in the
+roadmap made AI-specific signals *continuously* observable in production, as opposed
+to logged once and forgotten or measured offline in Phase 13's batch evals.
+
+**Real prerequisite: Phase 13, not Phase 5.** This is not a duplicate of Phase 5
+(Track A's distributed-systems observability — latency, circuit-breaker state,
+consumer lag). It's a different signal cluster: cost/token trends, human-override rate
+against AI recommendations (Phase 12's approval gate), and *continuous drift* in the
+same metrics Phase 13 defines and measures offline (hallucination rate, groundedness).
+You can't dashboard drift in a metric you haven't defined yet — Phase 13 has to exist
+first.
+
+**Goal:** take the request-level facts already captured in structured logs (correlation
+ID, token usage, latency — starting with Milestone 6.1's own logging work) and make
+them continuously monitored via a real observability backend (Datadog, per the human's
+choice) rather than logged and never looked at again. Concretely: cost trends over
+time; token-usage anomalies as a proxy signal for the excessive-tool-loop guardrail
+named back in Phase 10; human-override/approval-rate tracking from Phase 12's gate
+(did humans agree with the AI's recommendation, and how often, over time); drift
+dashboards for Phase 13's eval metrics instead of one-off offline numbers; and a
+correlation-ID-traceable audit trail (who/what approved which case, based on which
+retrieved evidence).
+
+**Naming honesty, consistent with earlier decisions in this project:** this phase
+builds the *observability mechanics* a real compliance program would rely on — audit
+trails, cost dashboards, override-rate tracking — not a claim of actual certified
+regulatory compliance (SOC2/PCI-DSS or otherwise). Same principle as the earlier
+correction to resume language: describe what's actually built, not what it resembles.
+
+**Named but not yet decided, to avoid over-planning per Rule 5:** Datadog is a real,
+paid, external SaaS dependency — unlike everything introduced so far in this project
+(Postgres, Ollama, Testcontainers are free/local; even the eventual hosted LLM
+provider is the human's own deliberate, cost-aware choice). Before this phase is
+actually detailed into milestones, it needs its own explicit decision (and likely an
+ADR): confirm current Datadog pricing/free-tier terms before committing rather than
+assuming, and confirm the log volume this project would actually generate stays within
+whatever tier is chosen.
 
 Detailed milestones written when Phase 13 is complete.
+
+---
+
+## Phase 15 — Production-Grade Capstone
+
+**Goal:** the full system — `Client → API → Order → Inventory → Payment → Kafka →
+Notification`, plus the AI layer (RAG/GraphRAG/Agents/MCP/Tools), plus Phase 14's
+governance/observability layer — as one coherent, production-oriented system. Final
+architecture is derived from what Phases 0–14 actually showed worked, not assumed now.
+Security, configuration, observability, resilience, schema evolution, idempotency,
+data consistency, deployment, load testing, failure testing.
+
+Detailed milestones written when Phase 14 is complete.
 
 ---
 

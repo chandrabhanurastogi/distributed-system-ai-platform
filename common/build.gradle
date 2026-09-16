@@ -1,0 +1,11 @@
+description = 'Common — shared, domain-free cross-cutting infrastructure'
+
+// This is a library, not a runnable application: no main class exists.
+// Disable the Boot plugin's executable-fat-jar task and produce a plain jar instead,
+// so other modules can depend on this one normally.
+bootJar {
+    enabled = false
+}
+jar {
+    enabled = true
+}

@@ -1,18 +1,18 @@
-package com.distributedplatform.orderservice.web;
+package com.distributedplatform.llmfundamentals.web;
 
 import com.distributedplatform.common.web.ErrorResponse;
-import com.distributedplatform.orderservice.exception.OrderNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.client.RestClientException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    @ExceptionHandler(OrderNotFoundException.class)
-    @ResponseStatus(HttpStatus.NOT_FOUND)
-    public ErrorResponse handleOrderNotFound(OrderNotFoundException e) {
-        return new ErrorResponse(e.getMessage());
+    @ExceptionHandler(RestClientException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public ErrorResponse handleOllamaUnavailable(RestClientException e) {
+        return new ErrorResponse("LLM backend unavailable: " + e.getMessage());
     }
 }

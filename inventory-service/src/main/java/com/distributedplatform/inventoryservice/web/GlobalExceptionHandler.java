@@ -1,5 +1,6 @@
 package com.distributedplatform.inventoryservice.web;
 
+import com.distributedplatform.common.web.ErrorResponse;
 import com.distributedplatform.inventoryservice.exception.InsufficientStockException;
 import com.distributedplatform.inventoryservice.exception.InventoryItemNotFoundException;
 import org.springframework.http.HttpStatus;
@@ -12,19 +13,19 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(InventoryItemNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
-    public String handleNotFound(InventoryItemNotFoundException e) {
-        return e.getMessage();
+    public ErrorResponse handleNotFound(InventoryItemNotFoundException e) {
+        return new ErrorResponse(e.getMessage());
     }
 
     @ExceptionHandler(InsufficientStockException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
-    public String handleInsufficientStock(InsufficientStockException e) {
-        return e.getMessage();
+    public ErrorResponse handleInsufficientStock(InsufficientStockException e) {
+        return new ErrorResponse(e.getMessage());
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public String handleBadRequest(IllegalArgumentException e) {
-        return e.getMessage();
+    public ErrorResponse handleBadRequest(IllegalArgumentException e) {
+        return new ErrorResponse(e.getMessage());
     }
 }
