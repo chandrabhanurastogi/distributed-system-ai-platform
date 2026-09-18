@@ -846,17 +846,120 @@ run), and the actual measurement is a success *rate* over varied prompts/scenari
 not the identical single case repeated — exactly the shape of metric Phase 13 (Evals)
 already names (tool selection accuracy, argument accuracy, execution success rate).
 
-Detailed milestones for Milestone 6.3 written now that 6.2 is verified done.
+### Milestone 6.3 — `LlmClient` interface + real hosted provider
 
-### Milestone 6.3 — `LlmClient` interface + real hosted provider (sketched)
+**Status: Complete — 2026-09-18**
 
-Introduce a minimal `LlmClient` interface once 6.2 is done, with `OllamaLlmClient`
-(retrofitting 6.1/6.2's code behind it) and a second, real implementation for a paid
-hosted provider (Anthropic or OpenAI — provider TBD, decided when this milestone
-starts), selected via a config flag. Justified by an actual second implementation to
-switch between, not spun up speculatively — same reasoning as ADR-0006's bar for
-`common`, applied to an interface instead of a shared module. Full task breakdown
-written when Milestone 6.2 is complete, per `CLAUDE.md` Rule 5.
+- [x] `LlmClient` interface (`ChatMessage`, `LlmResponse` DTOs), one method:
+      `LlmResponse chat(List<ChatMessage> messages)`
+- [x] `OllamaLlmClient` — retrofits Milestones 6.1/6.2's raw `OllamaChatService` calls
+      behind the interface
+- [x] `GeminiLlmClient` — a real second implementation against Google's hosted Gemini
+      API (the current 2026-era "Interactions API," `POST .../v1beta/interactions` —
+      not the legacy `generateContent` endpoint), selected via config
+- [x] Provider selected at runtime via `llm.provider` (`application.yml`), exactly one
+      `LlmClient` bean registered per run, proven by `LlmProviderConditionTest`
+- [x] Tests: `OllamaLlmClientTest` (real Ollama call through the interface),
+      `GeminiLlmClientTest` (2 pure unit tests on `serializeMessages`, 1 mock-server
+      test, 1 real-API smoke test gated on `GEMINI_API_KEY` being present),
+      `LlmProviderConditionTest` (3 `ApplicationContextRunner` tests proving the
+      config-flag switch actually excludes the non-selected bean)
+- [x] ADR-0007 — the stateless, full-history-per-call interface design decision
+
+**Provider chosen: Google Gemini, not Anthropic/OpenAI (2026-09-17).** Free-tier
+availability via Google AI Studio made hands-on experimentation possible without
+committing to paid usage this early — confirmed before deciding, not assumed: neither
+a Claude Pro nor a Gemini Advanced subscription covers API usage, these are separate
+pay-per-token accounts.
+
+**Real bug found and fixed (2026-09-17):** the first working version used `@Primary` on
+`OllamaLlmClient` to "select" it by default. This does not satisfy the milestone's
+actual goal. `@Primary` only breaks a tie when an unqualified injection point sees
+multiple candidate beans of the same type — both `OllamaLlmClient` and `GeminiLlmClient`
+still get fully constructed and registered in the context either way. There was no real
+switch, just a default preference. Replaced with `@ConditionalOnProperty(name =
+"llm.provider", havingValue = "...")` on both clients — a condition evaluated at
+bean-definition time, meaning the non-matching bean's definition is never registered at
+all. Proven, not just fixed: `LlmProviderConditionTest` asserts `doesNotHaveBean(...)`
+for the excluded client under each of the three property states (missing/ollama/gemini).
+
+**Real debugging arc getting Gemini working (2026-09-17), root causes were
+non-code:** the implementation had three real code bugs along the way — the URI
+builder never appended `/interactions` to the base path; both a `?key=` query param
+and an `x-goog-api-key` header were sent redundantly; `GeminiResponse.Usage`'s field
+mappings didn't match the verified real API field names (`total_input_tokens`/
+`total_output_tokens`). After fixing all three, the real API still failed:
+`x-goog-api-key` → 401 `ACCESS_TOKEN_TYPE_UNSUPPORTED`; switching to `Authorization:
+Bearer` → 403 "unregistered callers." Both looked like auth-format problems and
+weren't — the human found the actual root causes directly in the Google Cloud Console
+rather than continuing to guess at headers: the Gemini API was never enabled on the
+Google Cloud project created via AI Studio, and separately the initially-chosen model
+(`gemini-2.5-flash`) had been deprecated for new users, resolved by switching to
+`gemini-3.6-flash`. Interview Q3 named the general lesson: when different client-side
+credential-passing permutations keep producing different-but-still-failing results,
+that's itself a signal the problem is server-side account/project state, not the
+credential mechanism.
+
+**Security note (tracked here, not just in conversation):** two real, live Gemini API
+keys were pasted directly into chat during this milestone. Both were refused for use;
+immediate revocation was instructed regardless of the stated intent to "rotate it
+afterward" (the exposure already happens the moment a secret is typed into chat,
+independent of what happens next); all further debugging used environment variables
+the human set and referenced by name only, running commands themselves and pasting
+back non-secret output (HTTP status/body).
+
+**Real, non-fabricated benchmark (2026-09-18, per Rule 9 — approved explicitly by the
+human rather than skipped):** `LlmProviderComparisonTest` sends the identical prompt
+("Explain recursion in one short sentence.") through both real `LlmClient`
+implementations and logs latency + token counts side by side. Run once, in the human's
+own environment (needed a working `GEMINI_API_KEY`, which this assistant's own shell did
+not reliably have — see Milestone 6.1/6.3 environment notes on IntelliJ run-config env
+vars not propagating to other processes):
+
+| Provider | Latency | Input tokens | Output tokens |
+|---|---|---|---|
+| Ollama (`llama3.2`, local) | 373ms | 33 | 24 |
+| Gemini (`gemini-3.6-flash`, hosted) | 4745ms | 8 | 20 |
+
+**Explicit caveat, not glossed over:** the 12.7x latency gap is a clean local-vs-WAN
+comparison. The 33-vs-8 input token gap is **not** a clean tokenizer comparison — it's
+confounded by two stacked effects, both confirmed directly rather than assumed:
+different vocabularies between llama3.2's and Gemini's tokenizers (never portable
+across model families in general), plus Ollama's chat template injecting real control
+tokens and an unconditional system-preamble line (`Cutting Knowledge Date: December
+2023` — verified directly against the real output of `ollama show llama3.2
+--template`) into every request, while `GeminiLlmClient`'s single-message path sends
+the bare prompt string with zero framing.
+
+**Interview:** four questions, progressively harder, each required an answer before
+reveal. Q1 (why `@ConditionalOnProperty` succeeds where `@Primary` failed) landed the
+architecture correctly but initially misnamed the mechanism as
+`@EnabledIfEnvironmentVariable` (a JUnit test-gating annotation, unrelated to Spring
+bean selection) and conflated a Spring property with an OS environment variable —
+corrected on the spot, a distinction that mattered concretely during this same
+milestone's key-propagation confusion. Q2 (the cost of resending full history to
+Gemini every call, ADR-0007) answered correctly and completely on the first pass. Q3
+(why header-format changes couldn't fix the 401/403 sequence) correctly named the
+401-vs-403 distinction and correctly generalized the lesson about server-side state
+vs. client-side credential mechanism. Q4 (consequence of ADR-0007 in a tight agent
+loop) produced the intended O(N²) token-cost/TPM-quota/WAN-latency answer with real
+quantitative reasoning, but the first attempt answered a different, adjacent question
+about `serializeMessages()`'s flat-string format instead (role hallucination,
+delimiter bleed from tool-observation text, loss of structured tool-call semantics) —
+a genuinely new, real finding, not a wrong answer, just aimed at a different design
+decision than the one asked about; recorded as new tracked debt in `CLAUDE.md` rather
+than discarded, since it names a real untested failure scenario. Redirected back to
+the original question, which was then answered correctly, with one unverified claim
+flagged rather than accepted at face value: Ollama's KV-cache reuse for repeated
+prompt prefixes is plausible given how Ollama's runtime is documented to behave, but
+was not something this project's own benchmark actually measured.
+
+**Explicitly out of scope for 6.3, tracked forward:** no fix yet for the
+`serializeMessages()` flattening risk found during the interview (tracked in
+`CLAUDE.md` → Known Existing Debt, must be addressed before Phase 10 routes tool-calls
+through `GeminiLlmClient`); no Spring AI abstraction (still deliberately raw/hand-rolled
+per the Phase 6 sequencing decision — Spring AI remains a later, explicit milestone);
+no streaming responses from either provider.
 
 ---
 

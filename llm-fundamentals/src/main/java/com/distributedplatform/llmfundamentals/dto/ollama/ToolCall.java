@@ -1,4 +1,4 @@
-package com.distributedplatform.llmfundamentals.dto;
+package com.distributedplatform.llmfundamentals.dto.ollama;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

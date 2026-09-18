@@ -40,3 +40,4 @@ Why the other options lost — specifically, not just "we preferred X."
 | [0004](0004-plain-jdbc-and-flyway.md) | Plain JDBC over Spring Data JPA, and Flyway over Liquibase | Accepted |
 | [0005](0005-deliberate-concurrency-bug.md) | Ship a known lost-update race in `reserve`, on purpose, for Phase 1 | Accepted |
 | [0006](0006-shared-common-module.md) | Introduce a shared `common` module for cross-cutting infrastructure | Accepted |
+| [0007](0007-llmclient-stateless-interface.md) | `LlmClient` is a stateless, full-history-per-call interface | Accepted |

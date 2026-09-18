@@ -1,9 +1,9 @@
 package com.distributedplatform.llmfundamentals.service;
 
-import com.distributedplatform.llmfundamentals.dto.Message;
-import com.distributedplatform.llmfundamentals.dto.OllamaResponse;
-import com.distributedplatform.llmfundamentals.dto.Tool;
-import com.distributedplatform.llmfundamentals.dto.ToolCall;
+import com.distributedplatform.llmfundamentals.dto.ollama.Message;
+import com.distributedplatform.llmfundamentals.dto.ollama.OllamaResponse;
+import com.distributedplatform.llmfundamentals.dto.ollama.Tool;
+import com.distributedplatform.llmfundamentals.dto.ollama.ToolCall;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

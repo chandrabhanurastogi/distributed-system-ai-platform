@@ -1,10 +1,10 @@
 package com.distributedplatform.llmfundamentals.service;
 
-import com.distributedplatform.llmfundamentals.dto.Message;
-import com.distributedplatform.llmfundamentals.dto.OllamaRequest;
-import com.distributedplatform.llmfundamentals.dto.OllamaResponse;
-import com.distributedplatform.llmfundamentals.dto.Tool;
-import com.distributedplatform.llmfundamentals.dto.ToolCall;
+import com.distributedplatform.llmfundamentals.dto.ollama.Message;
+import com.distributedplatform.llmfundamentals.dto.ollama.OllamaRequest;
+import com.distributedplatform.llmfundamentals.dto.ollama.OllamaResponse;
+import com.distributedplatform.llmfundamentals.dto.ollama.Tool;
+import com.distributedplatform.llmfundamentals.dto.ollama.ToolCall;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;

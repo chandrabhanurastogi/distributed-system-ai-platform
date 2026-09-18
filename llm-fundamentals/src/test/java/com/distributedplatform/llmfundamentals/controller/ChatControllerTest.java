@@ -1,6 +1,6 @@
 package com.distributedplatform.llmfundamentals.controller;
 
-import com.distributedplatform.llmfundamentals.dto.Message;
+import com.distributedplatform.llmfundamentals.dto.ollama.Message;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.TestRestTemplate;

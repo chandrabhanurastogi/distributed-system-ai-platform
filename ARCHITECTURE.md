@@ -4,9 +4,9 @@ This document reflects the **current, actual state** of the system, verified aga
 repository — not the aspirational end state. It is updated every time a milestone changes
 a service boundary, API, database, topic, or consistency guarantee (see `CLAUDE.md` Rule 7).
 
-Last verified against repo: 2026-09-16, working tree (Milestone 6.1 changes in
-progress). Phase 0 is complete; Phase 6 (Track B, AI Foundations) is in progress in
-parallel with Track A per the two-track decision in `ROADMAP.md`.
+Last verified against repo: 2026-09-18, working tree (Milestone 6.3 complete). Phase 0
+is complete; Phase 6 (Track B, AI Foundations) is in progress in parallel with Track A
+per the two-track decision in `ROADMAP.md`.
 
 ---
 
@@ -30,7 +30,7 @@ parallel with Track A per the two-track decision in `ROADMAP.md`.
 |---|---|---|
 | `order-service` | `com.distributedplatform.orderservice` | `POST /orders`, `GET /orders/{id}` (404 on miss). Controller → Service → Repository. Persists `Order` (plain class, not a JPA entity — ADR-0004) via `OrderRepository` (`NamedParameterJdbcTemplate`). Also ships `springdoc-openapi-starter-webmvc-ui` for interactive API exploration (not BOM-managed — a genuine third-party dependency, correctly version-pinned). |
 | `inventory-service` | `com.distributedplatform.inventoryservice` | `GET /inventory/{sku}` (404 on miss), `POST /inventory/{sku}/reserve` (200, 409 on insufficient stock, 400 on invalid quantity). Same layering; `InventoryService.reserve` is the first `@Transactional` method in the codebase — see Data section below for a known, deliberate limitation of that boundary. Also ships `springdoc-openapi-starter-webmvc-ui`, same reason as `order-service`. |
-| `llm-fundamentals` | `com.distributedplatform.llmfundamentals` | Phase 6, Track B. Direct, un-abstracted calls to a local Ollama instance — no `LlmClient` interface yet, deliberately (see `ROADMAP.md` Phase 6 sequencing decision). `POST /chat` (multi-turn, caller supplies full history), `POST /extract-person` (schema-constrained structured output, demonstrating the two-parse mechanic — the response envelope parses automatically, but `message.content` is itself a JSON string requiring an explicit second parse). `POST /chat/weather` (Milestone 6.2) — a full tool-calling round trip: describe a tool, receive a structured `tool_calls` request (arguments arrive as a real nested object here, *not* a string — Ollama is inconsistent between this feature and structured output), execute it (a fake implementation — no real weather API), feed the result back as a `role: "tool"` message, get a real final answer. Tool dispatch (`OllamaChatService.executeToolCall`) explicitly handles an unrecognized tool name with an error result rather than silently producing no response — a dangling, unanswered tool call would otherwise leave the model waiting indefinitely. |
+| `llm-fundamentals` | `com.distributedplatform.llmfundamentals` | Phase 6, Track B. `POST /chat` (multi-turn, caller supplies full history), `POST /extract-person` (schema-constrained structured output, demonstrating the two-parse mechanic — the response envelope parses automatically, but `message.content` is itself a JSON string requiring an explicit second parse). `POST /chat/weather` (Milestone 6.2) — a full tool-calling round trip: describe a tool, receive a structured `tool_calls` request (arguments arrive as a real nested object here, *not* a string — Ollama is inconsistent between this feature and structured output), execute it (a fake implementation — no real weather API), feed the result back as a `role: "tool"` message, get a real final answer. Tool dispatch (`OllamaChatService.executeToolCall`) explicitly handles an unrecognized tool name with an error result rather than silently producing no response — a dangling, unanswered tool call would otherwise leave the model waiting indefinitely. **Milestone 6.3:** provider-agnostic `LlmClient` interface (ADR-0007 — stateless, full-history-per-call by design) with two real implementations, `OllamaLlmClient` (local) and `GeminiLlmClient` (hosted, Google's Interactions API), selected via `@ConditionalOnProperty(name = "llm.provider", ...)` so exactly one is registered in the Spring context at a time — proven by `LlmProviderConditionTest` asserting the non-selected bean is genuinely absent, not merely deprioritized. |
 
 Both `order-service`/`inventory-service` ship `spring-boot-starter-web`,
 `spring-boot-starter-actuator`, `spring-boot-starter-jdbc`, `spring-boot-starter-flyway`,
@@ -222,14 +222,30 @@ slot in a shared one.
 
 ## 4. AI Components
 
-Phase 6 is active (`llm-fundamentals` module) — real content now exists here per Rule 7,
-though still narrow. Direct HTTP calls to a local Ollama instance (`llama3.2`), no
-framework abstraction (no Spring AI, no `LlmClient` interface — deliberate, see
-`ROADMAP.md` Phase 6). Multi-turn conversation (caller-managed history, no server-side
-session), real token/usage accounting from Ollama's own response fields (not
-estimated), and schema-constrained structured output. No RAG, no agents, no MCP, no
-multi-agent orchestration yet — those remain empty until their phases are active, per
-Rule 5.
+Phase 6 is active (`llm-fundamentals` module) — real content now exists here per Rule 7.
+Multi-turn conversation (caller-managed history, no server-side session on either
+provider — ADR-0007), real token/usage accounting from each provider's own response
+fields (not estimated), and schema-constrained structured output against Ollama.
+
+As of Milestone 6.3, a provider-agnostic `LlmClient` interface exists with two real,
+switchable implementations — `OllamaLlmClient` (local, free) and `GeminiLlmClient`
+(hosted, Google's Interactions API, real API calls verified against a live project).
+Still no framework abstraction (no Spring AI) — this interface was hand-rolled
+deliberately, per the Phase 6 sequencing decision, precisely so the raw mechanics were
+understood before any framework's abstraction could hide them.
+
+A real, honest latency/token comparison (not fabricated, per Rule 9 — see
+`ROADMAP.md` Milestone 6.3) for the identical prompt "Explain recursion in one short
+sentence.": Ollama (`llama3.2`, local) — 373ms latency, 33 input tokens, 24 output
+tokens. Gemini (`gemini-3.6-flash`, hosted) — 4745ms latency, 8 input tokens, 20 output
+tokens. The 12.7x latency gap is a clean local-vs-WAN comparison. The input-token gap is
+**not** a clean tokenizer comparison — it's confounded by Ollama's chat template
+injecting control tokens and a default system preamble into every request (verified
+directly against `ollama show llama3.2 --template`), while `GeminiLlmClient`'s
+single-message path sends the bare string with zero framing.
+
+No RAG, no agents, no MCP, no multi-agent orchestration yet — those remain empty until
+their phases are active, per Rule 5.
 
 ---
 
@@ -246,3 +262,4 @@ Rule 5.
 | 2026-09-14 | AI curriculum revised a second time. Phase 12 (multi-agent) confirmed in scope, resequenced to depend on Phase 10 directly rather than Phase 11 (MCP) — no real dependency between multi-agent orchestration and MCP exists. `dispute-service`'s scope consolidated: a proposed standalone service for scheme/interchange-rule configuration (named after a specific employer's actual internal system) was rejected — folded into `dispute-service`'s existing RAG corpus as a second document category instead, avoiding both the reused proprietary name and an architecturally-unjustified second service. Phase 8's claim-classification task now explicitly excludes filing-deadline checking (moved to Phase 10 as a deterministic tool, not an LLM/RAG reasoning task) and explicitly excludes OCR/multimodal receipt processing (out of the two chosen AI capabilities' scope). Phase 12 reframed around a concrete Investigator/Reviewer pattern on `dispute-service` with a human-approval gate. Clarified: this project is practice material for defending real production work done elsewhere, not itself the subject of any resume/interview claim. |
 | 2026-09-16 | Phase 6 started (Milestone 6.1): new `llm-fundamentals` module makes direct, un-abstracted calls to a local Ollama instance — chat (single- and multi-turn, history proven via a real two-call test), real token/usage accounting, and schema-constrained structured output. New `common` module (ADR-0006) extracts `CorrelationIdFilter` — previously duplicated between `order-service`/`inventory-service` — via a proper Spring Boot auto-configuration, once a third module needed it. `springdoc-openapi-starter-webmvc-ui` added to `order-service`/`inventory-service` for interactive API exploration. Phase 14 (new) added to the roadmap: AI Governance and Compliance Observability, sequenced after Evals, before the (renumbered) Phase 15 capstone — sketched only, not detailed, pending an explicit decision on Datadog cost/tier. |
 | 2026-09-16 | Milestone 6.2 complete: tool-calling mechanics added to `llm-fundamentals`, still raw against Ollama, no framework abstraction. Full round trip verified for real — describe a tool, receive a structured `tool_calls` request, execute it (fake implementation), feed the result back as a `role: "tool"` message, get a genuine final answer (`POST /chat/weather`). `llama3.2` empirically produced correctly-formed tool calls in testing, on a corrected basis after an initial, inaccurate justification ("the LLM is assumed tested") was named and rejected — Phase 13 (Evals) exists precisely because that assumption doesn't hold in real practice. A user-reported confusion led to two clarifications worth recording: this is not MCP (a separate client-server protocol, Phase 11's job — tool-calling is one of its underlying mechanisms, not the protocol itself), and a request to use Spring AI's `@Tool` annotation here was named as a direct conflict with Phase 6's raw-before-abstraction design and consciously deferred to Milestone 6.3, the same pattern as the pessimistic-locking conflict in Milestone 0.4. Tool dispatch was refactored into `executeToolCall`, closing a real gap found during the milestone's own DoD walkthrough: an unrecognized tool name now returns an explicit error result instead of silently producing no response, with a genuine unit test (no Spring context, no real Ollama call) proving it. |
+| 2026-09-18 | **Milestone 6.3 complete — Phase 6 ends here for now.** Provider-agnostic `LlmClient` interface introduced (ADR-0007: deliberately stateless, full-history-per-call, sacrificing Gemini's native `previous_interaction_id` session continuation for a uniform seam both providers satisfy). `OllamaLlmClient` retrofits Milestones 6.1/6.2's raw code behind the interface; `GeminiLlmClient` is a genuine second implementation calling Google's real (2026-era "Interactions API", not the legacy `generateContent` endpoint) hosted API, selected via `@ConditionalOnProperty(name = "llm.provider", ...)` — a real bug was found and fixed here: an initial `@Primary`-based approach left both beans registered and satisfied none of the milestone's actual "switch provider via config" goal, since `@Primary` only breaks ambiguous-injection ties rather than preventing bean creation; replaced with `@ConditionalOnProperty` and proven with `LlmProviderConditionTest` asserting the non-selected bean is absent from the context entirely. Getting the real Gemini API working required two non-code root causes the human found independently after header-format guessing (`x-goog-api-key` → 401, `Authorization: Bearer` → 403) went nowhere: the Gemini API was never enabled on the Google Cloud project created via AI Studio, and the initially-chosen model (`gemini-2.5-flash`) was deprecated for new users. A real, non-fabricated latency/token comparison was run (see §4, AI Components) — Ollama 373ms/33in/24out vs. Gemini 4745ms/8in/20out for an identical prompt, with the input-token gap explicitly flagged as confounded by chat-template overhead rather than a clean tokenizer comparison. New tracked debt surfaced during this milestone's closing interview, not yet fixed: `GeminiLlmClient.serializeMessages()`'s flat-string transcript format (role-prefixed text ending in a trailing `Assistant:` prime) has no tested failure scenario for multi-turn agent-shaped content — untrusted tool-observation text containing literal `User:`/`Assistant:` substrings could be mistaken for real dialogue turns, and the model could hallucinate past its own turn with no equivalent to Ollama's hard `<\|eot_id\|>` stop token. Recorded in `CLAUDE.md` → Known Existing Debt, to be addressed before Phase 10 (Agents) routes tool-calling through this provider. Two security incidents occurred and were handled during this milestone: real, live Gemini API keys were pasted into chat twice; both were refused for use, revocation was instructed immediately regardless of stated intent to rotate afterward, and debugging proceeded only via the human running commands in their own environment. |

@@ -1,7 +1,7 @@
 package com.distributedplatform.llmfundamentals.service;
 
-import com.distributedplatform.llmfundamentals.dto.Message;
-import com.distributedplatform.llmfundamentals.dto.ToolCall;
+import com.distributedplatform.llmfundamentals.dto.ollama.Message;
+import com.distributedplatform.llmfundamentals.dto.ollama.ToolCall;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;

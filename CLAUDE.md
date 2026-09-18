@@ -124,3 +124,18 @@ assistant:
   whether that request is coming from within Phase 1 (expected, do it) or from
   impatience outside it (name the conflict again, the way it was named here — don't
   silently comply).
+- **Untested failure scenario, surfaced during Milestone 6.3's closing interview, not
+  yet fixed:** `GeminiLlmClient.serializeMessages()` flattens a `List<ChatMessage>`
+  into one plain string — role-prefixed lines ending in a trailing `Assistant:` prime
+  (see ADR-0007 for the separate, already-decided statelessness question this is not
+  the same as). This flattening has no tested behavior for agent-shaped content: if a
+  tool observation fed back into history contains literal text like `User: ...` or
+  `Assistant: ...`, the flattener can't distinguish it from a real dialogue turn — a
+  real prompt-injection-shaped risk once tool output is untrusted external data, not
+  just our own fake weather stub. Separately, Gemini has no equivalent to Ollama's hard
+  `<|eot_id|>` stop token forcing generation to end at a turn boundary, so a long
+  agent-shaped transcript could plausibly hallucinate past its own turn and answer on
+  the "user's" behalf. Neither failure mode has a test proving or disproving it yet.
+  Must be addressed — either fixed or explicitly re-scoped with a documented
+  trade-off — before Phase 10 (Agents) routes any real tool-calling loop through
+  `GeminiLlmClient`.

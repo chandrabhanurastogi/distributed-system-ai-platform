@@ -1,8 +1,8 @@
 package com.distributedplatform.llmfundamentals.controller;
 
 import com.distributedplatform.llmfundamentals.dto.ExtractedPerson;
-import com.distributedplatform.llmfundamentals.dto.Message;
-import com.distributedplatform.llmfundamentals.dto.OllamaResponse;
+import com.distributedplatform.llmfundamentals.dto.ollama.Message;
+import com.distributedplatform.llmfundamentals.dto.ollama.OllamaResponse;
 import com.distributedplatform.llmfundamentals.service.OllamaChatService;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
