@@ -971,7 +971,104 @@ no streaming responses from either provider.
 magnitude → cosine similarity) before touching a real embedding model or a VectorStore.
 Build a small retrieval system by hand before introducing a vector database.
 
-Detailed milestones written when Phase 6 is complete.
+### Milestone 7.1 — Cosine similarity from scratch
+
+**Status: Complete — 2026-09-20**
+
+- [x] `dotProduct(double[] a, double[] b)` — null check, empty-vector check, dimension-
+      mismatch check, then the actual sum-of-products computation
+- [x] `magnitude(double[] v)` — Euclidean norm via `Math.sqrt(dotProduct(v, v))`,
+      reusing `dotProduct` for the computation while keeping its own null check (see
+      bug fixed below)
+- [x] `cosineSimilarity(double[] a, double[] b)` — `dotProduct(a, b) / (magnitude(a) *
+      magnitude(b))`, with an explicit zero-magnitude check ahead of the division
+- [x] Three named, unchecked exceptions — `EmptyVectorException`,
+      `VectorDimensionMismatchException`, `ZeroVectorException` — one per genuinely
+      distinct failure condition, not one generic exception (ADR-0008)
+- [x] Unit tests only, no Spring context, no I/O — hand-computed expected values for
+      every case: normal computation, dimension mismatch, empty vectors (both operand
+      positions, proving precedence), null inputs, zero-magnitude vectors, and four
+      canonical angles for cosine similarity (parallel, anti-parallel, orthogonal, 45°)
+- [x] ADR-0008 — the zero-vector-undefined and three-exception-type decisions
+
+**Module/package decision (2026-09-18):** lives in a new package,
+`com.distributedplatform.llmfundamentals.vector`, inside the existing
+`llm-fundamentals` module — explicitly *not* a new Gradle module. Reasoning, stated
+precisely by the human: this is a package (logical) boundary, not a module
+(architectural) boundary — a package costs nothing (no new build file, no cross-module
+component-scan implications, the exact costs ADR-0006 had to solve for when `common`
+was introduced), while a new module would introduce structural separation before a
+real architectural boundary exists to justify it. Explicitly scoped to Milestone 7.1
+only — the human named directly that this reasoning should not be assumed to extend to
+all of Phase 7 without reassessment once real embeddings and a vector store are
+introduced.
+
+**Precision-under-pressure, worth recording (2026-09-18/19):** the zero-vector
+decision required correcting an initial ambiguous answer that read as self-contradictory
+(described a rejected "return `0.0`" convention in the same breath as recommending
+"throw"), caught and clarified before any code was written from it — not a wrong
+answer, an ambiguous one, resolved by asking for the unambiguous version rather than
+guessing at intent. Separately, the human correctly walked back their own initial
+framing — "throwing is mathematically required" — to the more precise "mathematics
+says undefined; throwing is the pedagogically/operationally correct representation
+this milestone chooses" — the same kind of precision Rule 4 requires of distributed-
+systems vocabulary, self-applied here to vector-math vocabulary.
+
+**Two real bugs found and fixed during code review, both worth recording as a
+pattern, not just individually:**
+1. A dead, unused exception constructor (`VectorDimensionMismatchException(String
+   message)`, later `ZeroVectorException(String message)`) was written speculatively
+   with no caller and a `-1` sentinel default for its fields — removed both times it
+   appeared, the second occurrence being the *same mistake recurring* after having
+   already been corrected once, worth noting as a habit to watch for going forward.
+2. `magnitude(null)` initially threw `NullPointerException` with the message
+   `"Vector 'a' must not be null"` — `dotProduct`'s internal parameter name leaking
+   through a delegation call, confusing to a caller who only ever called `magnitude`
+   (whose own parameter is `v`, and which has no second parameter at all). Fixed by
+   giving `magnitude` its own null check with a correctly-scoped message before
+   delegating to `dotProduct` for computation — reuse the computation, not the
+   error-reporting.
+
+**Explicitly deferred, not silently missed:** duplicated null/empty/dimension-mismatch
+validation logic between `dotProduct` and `cosineSimilarity` (an extraction into a
+shared private helper was flagged during review); the `magA == 0.0` exact
+floating-point equality check (an accepted baseline for hand-constructed exact-zero
+test vectors, explicitly deferred to Milestone 7.2 if a real embedding model ever
+produces a genuinely near-zero, nonzero magnitude — see ADR-0008's Consequences).
+
+**Explicitly out of scope for 7.1:** no real embedding model call, no retrieval over a
+document set, no vector store. Those are Milestone 7.2.
+
+**Interview (2026-09-19/20):** six questions, progressively harder, each required an
+answer before reveal. Strong on the core geometry (why cosine similarity divides out
+magnitude, and the concrete "longer vectors get inflated dot products" failure mode of
+skipping that step), on tracing the exact execution order of the human's own
+`validatePair` precedence for a specific input rather than just asserting the right
+label, on correctly identifying floating-point underflow as a real (not hypothetical)
+path to a near-zero-but-nonzero magnitude and its concrete numeric consequence
+(`Infinity`/`NaN`, not "it throws"), and on deriving the dot-product/cosine-similarity
+equivalence under vector normalization plus its real performance rationale (skipping
+`sqrt` at query-time scale). Two genuine growth areas surfaced, not glossed over: (1)
+no prior knowledge of approximate nearest-neighbor search (HNSW/IVFFlat) or why
+brute-force `O(N)`-per-query comparison fails at real corpus scale — correctly said "I
+don't know" rather than guessing, and was taught the concept directly, flagged as
+material to review deliberately before Phase 8 rather than absorb passively when it
+arrives; (2) an initial answer to "would your dimension check catch two different
+embedding models producing coincidentally-equal dimensionality" described the right
+intuition (different models, different coordinate spaces) but didn't commit to the
+direct answer ("no, it would not detect this — it silently returns a plausible-looking
+wrong number") until pressed — a precision-under-direct-questioning habit worth
+practicing, not a design flaw, since the code itself is correct.
+
+### Milestone 7.2 — Real embeddings + hand-rolled brute-force retrieval (sketched)
+
+Call a real embedding model (likely Ollama's local embedding models, e.g.
+`nomic-embed-text` — free, no cost concern, consistent with Phase 6's Ollama-first
+approach) to embed a small, real set of sentences, then use Milestone 7.1's
+`cosineSimilarity` to rank them by relevance to a query — brute-force, in memory, no
+database — proving retrieval actually works before Phase 8 introduces `pgvector` and a
+real indexed vector store. Full task breakdown written when Milestone 7.1 is complete,
+per `CLAUDE.md` Rule 5.
 
 ---
 

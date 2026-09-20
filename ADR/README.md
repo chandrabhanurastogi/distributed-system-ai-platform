@@ -41,3 +41,4 @@ Why the other options lost — specifically, not just "we preferred X."
 | [0005](0005-deliberate-concurrency-bug.md) | Ship a known lost-update race in `reserve`, on purpose, for Phase 1 | Accepted |
 | [0006](0006-shared-common-module.md) | Introduce a shared `common` module for cross-cutting infrastructure | Accepted |
 | [0007](0007-llmclient-stateless-interface.md) | `LlmClient` is a stateless, full-history-per-call interface | Accepted |
+| [0008](0008-vector-math-error-representation.md) | Represent invalid/undefined vector operations as named exceptions, not sentinel values | Accepted |
