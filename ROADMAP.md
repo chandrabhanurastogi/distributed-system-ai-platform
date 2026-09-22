@@ -1060,15 +1060,123 @@ direct answer ("no, it would not detect this — it silently returns a plausible
 wrong number") until pressed — a precision-under-direct-questioning habit worth
 practicing, not a design flaw, since the code itself is correct.
 
-### Milestone 7.2 — Real embeddings + hand-rolled brute-force retrieval (sketched)
+### Milestone 7.2 — Real embeddings + hand-rolled brute-force retrieval
 
-Call a real embedding model (likely Ollama's local embedding models, e.g.
-`nomic-embed-text` — free, no cost concern, consistent with Phase 6's Ollama-first
-approach) to embed a small, real set of sentences, then use Milestone 7.1's
-`cosineSimilarity` to rank them by relevance to a query — brute-force, in memory, no
-database — proving retrieval actually works before Phase 8 introduces `pgvector` and a
-real indexed vector store. Full task breakdown written when Milestone 7.1 is complete,
-per `CLAUDE.md` Rule 5.
+**Status: Complete — 2026-09-22**
+
+**Environment prerequisite, verified before starting (2026-09-20):** local Ollama had
+only `llama3.2:latest` pulled — no dedicated embedding model yet. Pulled
+`nomic-embed-text` (274MB) before writing any code, the same environment-first-
+verification discipline Phase 6 used for `llama3.2`.
+
+- [x] Called Ollama's real embedding endpoint (`POST /api/embed`) directly via `curl`
+      before writing any code, confirming the real request/response shape and real
+      vector dimensionality — **768 dimensions** for `nomic-embed-text`, verified by
+      counting, not assumed from documentation. Response envelope is batch-shaped
+      (`embeddings` is a list of vectors even for one input).
+- [x] New sibling package `com.distributedplatform.llmfundamentals.embedding` (not
+      nested inside `vector`, after an initial proposal to nest it there was corrected
+      — `vector` is deliberately pure-math/no-I/O; embedding-calling code is a real
+      HTTP client and belongs beside it, not inside it)
+- [x] `Document(String id, String text, double[] embedding)` — minimal record,
+      deliberately without a metadata map (nothing yet needs one)
+- [x] `OllamaEmbeddingService.embed(String model, String input)` — real HTTP call,
+      two-constructor shape mirroring `GeminiLlmClient` (`@Autowired` one reading
+      `@Value` properties and delegating, one direct `RestClient`-accepting one for
+      test injection)
+- [x] `BruteForceRetriever.topK(double[] queryVector, List<Document> corpus, int k)` —
+      plain `List<Document>`, linear scan, no `Map`/cache/interface abstraction (a
+      proposed "HashMap as an in-memory cache, swap for a vector DB later" design was
+      corrected: brute-force similarity search touches every entry regardless of
+      container, so a `Map`'s real strength — O(1) keyed lookup — is never exercised
+      by this access pattern; building an interface now to "swap later" would also
+      repeat the exact premature-abstraction pattern ADR-0006 already rejected once)
+- [x] Tests, layered: `BruteForceRetrieverTest` — 8 pure unit tests, hand-supplied fake
+      vectors, no Ollama, no Spring — ranking order (via `containsExactly`, not
+      `containsExactlyInAnyOrder`, since order is exactly what's being proven), empty/
+      null corpus, non-positive `k`, and exception propagation from `VectorMath` for a
+      malformed query vector *and* a malformed corpus entry (both operand positions,
+      matching the precedent set by Milestone 7.1's empty-vector precedence tests).
+      `OllamaEmbeddingServiceTest` — one real integration test against local Ollama,
+      two `MockRestServiceServer` tests proving the empty/null-embeddings failure path
+      (previously untested — a real gap found and fixed during review).
+      `BruteForceRetrievalIntegrationTest` — full real, end-to-end pipeline.
+- [x] Real, non-fabricated measurement (per Rule 9) — see below.
+
+**Real end-to-end result (2026-09-22):** an 8-sentence corpus, four unambiguously about
+distributed systems, four unambiguously about baking, ranked against the query "How do
+distributed databases handle node failures and maintain consistency?" using real
+`nomic-embed-text` embeddings and Milestone 7.1's real `cosineSimilarity`. All four
+distributed-systems documents ranked strictly above all four baking documents, with a
+clean gap between the clusters (lowest distributed-systems score 0.4582 vs. highest
+baking score 0.4087). This is the first genuine end-to-end proof in this project that
+Milestone 7.1's hand-verified math and a real embedding model compose into a working,
+human-interpretable retrieval result — not a hand-constructed test case, an emergent
+one.
+
+**Deliberate, correct testing-philosophy decision, worth recording:** the integration
+test asserts only that the single top-ranked result is *some* distributed-systems
+document — it explicitly does not assert the full fine-grained rank order within each
+topic cluster. Reasoning, stated directly in the test's own comment: asserting an exact
+full ordering would be a claim about the embedding model's specific semantic behavior,
+which is a finer-grained guarantee than this milestone needs and would make the test
+flaky against a future model or model-version change — a real regression in the
+*model* is a different thing from a regression in *this project's code*, and the test
+should only fail for the latter. `BruteForceRetrieverTest`'s hand-crafted-vector tests
+already fully prove the ranking/sorting *logic* is correct; this integration test's job
+is only to prove real composition works, not to re-litigate logic already proven
+elsewhere.
+
+**Real anomaly investigated, not silently reported (2026-09-22):** the first
+integration test run measured 14,308ms to embed 8 sentences (~1,788ms/sentence) —
+roughly 50x slower than an earlier ad-hoc `curl` benchmark against the same model
+(~35.8ms). Rather than reporting this as "the number," it was investigated: re-running
+the identical test immediately afterward (forcing re-execution past Gradle's
+up-to-date cache) measured 217ms total (~27ms/sentence) — closely matching the earlier
+`curl` result. Root cause: Ollama had unloaded `nomic-embed-text` from memory after a
+period of inactivity since it was pulled, and the first call in this test run paid a
+real model-load cost before falling back to fast steady-state inference. Both numbers
+are kept, not just the fast one — cold-start latency distinct from steady-state
+latency is a genuine, real characteristic of locally-hosted (or on-demand/serverless)
+model serving, not an artifact to discard.
+
+**Explicitly out of scope for 7.2:** no persistence (corpus lives in memory only —
+introducing a database is deliberately Phase 8's job, not this milestone's), no
+approximate nearest-neighbor indexing (the interview during Milestone 7.1 already
+named why brute force doesn't scale — this milestone deliberately stays brute-force
+since the corpus is tiny by design), no REST endpoint (no real need for one surfaced).
+
+**Interview (2026-09-22):** five questions, progressively harder, each required an
+answer before reveal. The strongest interview performance in this project to date. Q1
+("what does each test prove that the other can't") took two attempts to land — the
+first two answers described surface differences (real vs. fake data, dimensionality)
+rather than the actual epistemic distinction (hand-crafted vectors give a
+mathematically certain expected answer, proving the human's own logic; real embeddings
+give no such certainty and can only prove real-system composition and model quality),
+which was then taught directly rather than probed a third time. Q2 (why the
+integration test deliberately under-asserts) and Q3 (the cold-start/steady-state
+timing investigation) were both answered correctly and precisely — Q3's initial answer
+was flagged as very close to a direct recall of this session's own prior explanation,
+and a supplementary "why would a model server unload an idle model at all" question
+confirmed genuine understanding (the RAM-is-finite-and-costly trade-off) rather than
+recitation. Q4 (whether to swap `cosineSimilarity` for raw `dotProduct` given the
+measured near-unit-length embeddings) produced a genuinely excellent answer: correctly
+distinguished an observed fact from a guaranteed contract, correctly named the failure
+mode as silent-wrong-ranking rather than a crash, correctly extended Rule 4's spirit
+("a number from `dotProduct` on non-unit vectors isn't actually cosine similarity,
+calling it that would be exactly the loose terminology the rules forbid") into a new
+domain, and connected forward to pgvector's real `vector_cosine_ops`/`vector_ip_ops`
+decision — with one factual slip caught and corrected: a cited "~106 ms/sentence"
+didn't match either real measured number (27ms warm, 1,788ms cold-inclusive),
+reinforcing that Rule 9 applies to *citing* a previously-measured number correctly, not
+just to producing one honestly the first time. Q5 (tracing a mixed-dimensionality
+corpus scenario after a careless model migration) was answered with genuine
+staff-level precision: correctly identified that `Stream.sorted()` is a stateful
+operation that defeats `.limit(k)`'s short-circuiting, correctly derived that this
+means the *entire query* fails rather than just the stale row, and correctly
+distinguished "fail-fast beats silent-wrong-answer" from "this specific fail-fast is
+still blunt" — a real, new finding recorded in `CLAUDE.md` → Known Existing Debt as a
+direct result of this answer, not asserted and then discarded.
 
 ---
 

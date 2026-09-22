@@ -94,6 +94,7 @@ When we do the same for Document 2:
         validatePair(a, b);
 
         double magA = magnitude(a);
+
         double magB = magnitude(b);
 
         if (magA == 0.0 || magB == 0.0) {

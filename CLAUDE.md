@@ -139,3 +139,20 @@ assistant:
   Must be addressed — either fixed or explicitly re-scoped with a documented
   trade-off — before Phase 10 (Agents) routes any real tool-calling loop through
   `GeminiLlmClient`.
+- **Untested failure scenario, surfaced during Milestone 7.2's closing interview, not
+  yet fixed:** `BruteForceRetriever.topK` has no defense against a corpus containing
+  embeddings from more than one embedding model (e.g. a mixed-dimensionality corpus
+  left over from a careless model migration). Traced precisely, not just asserted:
+  because `.sorted()` is a stateful stream operation that must consume the entire
+  upstream before emitting anything, `.limit(k)` downstream does **not** short-circuit
+  evaluation — `VectorMath.cosineSimilarity` runs against every document in the corpus
+  before any result can be returned, so a single stale, wrong-dimension document
+  anywhere in the corpus throws `VectorDimensionMismatchException` and fails the
+  **entire query**, not just that one row. This is fail-fast (no silent wrong-ranking
+  result — better than the alternative), but blunt: the exception carries no document
+  id or affected-row count, and one unmigrated row causes a full retrieval outage for
+  every caller of that query, not a partial/degraded result. Deliberately not fixed
+  inside `BruteForceRetriever`, which was explicitly scoped to a tiny, single-model,
+  in-memory corpus (Milestone 7.2) — this belongs as a real design question (schema/
+  dimension enforcement, migration safety) once Phase 8 introduces a real vector store
+  with actual multi-row guarantees to lean on, not solved speculatively here.
