@@ -63,6 +63,7 @@ milestone files below still exist and follow the same Q&A format.)*
 | [6.3](6.3.md) | `LlmClient` interface + real hosted provider | Transcribed |
 | [7.1](7.1.md) | Cosine similarity from scratch | Transcribed |
 | [7.2](7.2.md) | Real embeddings + hand-rolled brute-force retrieval | Transcribed |
+| [8.1](8.1.md) | `dispute-service` scaffolding + `pgvector` proven | Transcribed |
 
 **Fidelity note:** milestones 0.2 through 6.2 predate this conversation's own
 transcript and are reconstructed from `ROADMAP.md`'s narrative summaries — accurate in

@@ -1225,7 +1225,101 @@ request path via the same async/event-driven pattern Kafka is already scheduled 
 introduce at Phase 3/4 — heavy AI work (embedding, retrieval) has no business blocking
 a REST response.
 
-Detailed milestones written when Phase 7 is complete.
+**Closing milestone, sketched now, detailed once the rest of Phase 8 is done
+(2026-09-23):** after the full ingestion→chunking→embedding→indexing→retrieval→
+answer pipeline is hand-built and understood, a scoped translation of that
+already-understood pipeline into real LangChain (Python) idioms — not a parallel
+rewrite, not started until the hand-built version exists, specifically to build real
+tool-name fluency with a library many real RAG job descriptions name directly. Same
+"raw mechanics first, framework second" sequencing this project has used everywhere
+else (raw HTTP before `LlmClient`, brute-force before `pgvector`). Prompted by an
+explicit strategic check-in: this project is Java-only while much of the industry's
+AI/RAG tooling is Python-centric; the conclusion reached was that the *concepts*
+being learned are language-agnostic and arguably a stronger Staff-level signal than
+framework fluency alone, but that real, scoped exposure to the actual named tools is
+still worth adding deliberately, once, rather than never or as a full rewrite.
+
+### Milestone 8.1 — `dispute-service` scaffolding + `pgvector` proven
+
+**Status: Complete — 2026-09-23**
+
+- [x] New `dispute-service` Gradle module, wired into `settings.gradle`
+- [x] `dispute-db` added to `docker-compose.yml` — **`pgvector/pgvector:pg17`**, not
+      plain `postgres:17-alpine`, since the extension isn't part of stock Postgres
+- [x] Flyway migration: `CREATE EXTENSION IF NOT EXISTS vector;` plus a minimal
+      `dispute_documents(id, text, embedding vector(768))` table — 768 to match
+      `nomic-embed-text`'s real measured dimensionality from Phase 7
+- [x] Testcontainers integration test (real `pgvector/pgvector:pg17` image) proving a
+      real `ORDER BY embedding <=> ?` query returns the mathematically correct nearest-
+      neighbor order for hand-computed vectors — the SQL-level equivalent of Milestone
+      7.1's hand-crafted-vector tests
+- [x] Resolved open review item: `spring-boot-starter-web`/`spring-boot-starter-actuator`
+      confirmed not needed yet — the dead `server.port`/`management.endpoint.health.
+      show-details` config that implied capabilities the service didn't have was removed
+      outright rather than commented out (an initial fix commented the lines out instead
+      of deleting them, caught and corrected — `CLAUDE.md`'s own instructions call out
+      leaving "removed" comments behind as an anti-pattern to avoid). Starters to be
+      added when a real HTTP surface actually needs them, not before.
+- [x] ADR-0009 for the two decisions below
+- [x] Full DoD walkthrough, interview, `ARCHITECTURE.md` update
+
+**Real architectural decisions made, both requiring genuine reasoning, not a default
+pick — full trace in `interviews/` once written:**
+1. **`vector_cosine_ops`, not `vector_l2_ops` or `vector_ip_ops`.** L2 was rejected on
+   semantic grounds independent of normalization — it conflates magnitude and
+   direction, and two semantically-aligned sentences with different pooled magnitudes
+   would register as "far apart." Inner product was rejected because its correctness
+   depends on every row being unit-length forever, a guarantee nothing in the schema
+   enforces — and `dispute-service`'s corpus is specifically the place in this project
+   most likely to violate that guarantee, since Phase 8's own plan involves repeatedly
+   re-embedding this exact corpus while comparing chunking/retrieval strategies. Named
+   explicitly as "the same mistake from `BruteForceRetriever`'s mixed-dimensionality
+   finding, relocated from application code into a database index."
+2. **No HNSW or IVFFlat index in this milestone — deferred.** IVFFlat specifically
+   cannot be built meaningfully against a near-empty table (its clustering step needs
+   a representative data sample at build time); adding either index now, with zero
+   measured query-latency numbers, was named as the same category of mistake as
+   fabricating a benchmark (Rule 9's discipline applied to justifying an architecture
+   choice, not just reporting a number). Revisit once a real corpus size and a real
+   measured sequential-scan latency number both exist.
+
+**Interview (2026-09-23):** five questions, progressively harder, each required an
+answer before reveal — the strongest overall performance in this project to date, every
+question either correct on the first pass or precisely self-corrected once pressed. Q1
+(what `vector(768)` guarantees vs. what `VectorDimensionMismatchException` guaranteed)
+was answered completely unprompted on both halves — the schema enforces structurally
+rather than relying on every caller remembering a check, *and* it only guarantees
+cardinality, not semantic origin, correctly re-deriving the same limitation Milestone
+7.1's Q6 found at the Java level, one layer down the stack. Q2 (tracing the real
+sequential-scan execution) included a genuinely sophisticated, correct point about
+Postgres internals — physical heap order matching insertion order here but not
+guaranteed to in general — and generalized "a sort needs its full input, whether
+`Stream.sorted()` or Postgres's `Sort` node" into one transferable principle across two
+different execution environments, directly extending the Milestone 7.2 Q4 finding; one
+minor terminology correction, `<=>` computes cosine *distance*, not similarity. Q3 (why
+`vector_ip_ops` is the riskier choice here specifically) correctly identified that the
+unit-length guarantee isn't a one-time cost but has to be re-paid on every one of Phase
+8's planned repeated re-embedding passes. Q4 (the actual bar for a repository class)
+required one real correction — an initial "second caller" framing was wrong, since zero
+real (non-test) callers currently exist — but the corrected answer that followed was
+genuinely exceptional: re-derived the purpose of a repository by inspecting the actual
+`OrderRepository` in this codebase rather than reasoning abstractly, named a real cost
+of introducing the abstraction too early (not knowing whether `dispute_documents`
+survives as one table once Phase 8's stated multi-category corpus plan is built out),
+and cited ADR-0006's own language back precisely to show this is the same discipline
+applied a third time, not an invented one. Q5 (the synchronous-ingestion failure mode
+under load) named three distinct, correctly-reasoned mechanisms unprompted — Tomcat
+thread pool exhaustion, the embedding backend as a saturating shared resource with
+diverging (not linear) wait times, and HikariCP connection pool exhaustion cascading to
+unrelated endpoints on the same service — the last one directly reapplying the "blast
+radius" analytical pattern from Milestone 7.2's Q4 to a completely different mechanism.
+Growth area named: precision under first-pass pressure on exact thresholds/counts
+("second caller" vs. the actual zero) — self-corrects well once pushed, worth
+practicing stating the precise number before being asked.
+
+**Explicitly out of scope for 8.1:** no repository class (ADR-0004 — one earns its
+place once real domain code needs one), no REST endpoint, no real document corpus, no
+index.
 
 ---
 
@@ -1307,6 +1401,15 @@ agent (Phase 10) must first be shown insufficient for this exact task, concretel
 (e.g., a single agent conflating "gather evidence" and "critique the evidence" in one
 undifferentiated pass, with no independent check before a human sees it) — not
 assumed insufficient because multi-agent sounds more sophisticated.
+
+**Closing milestone, sketched now, detailed once the rest of Phase 12 is done
+(2026-09-23):** once the Investigator/Reviewer pattern is hand-built in Java and its
+state/nodes/edges/routing mechanics are genuinely understood, a scoped translation of
+that same pattern into the real LangGraph (Python) library — the direct counterpart to
+Phase 8's closing LangChain milestone, and the more directly relevant of the two given
+this phase's name and subject matter. Not started until the hand-built version exists;
+the point is comparing a real framework's API against a mental model already earned by
+building it manually, not learning LangGraph from a standing start.
 
 Detailed milestones written when Phase 10 is complete.
 

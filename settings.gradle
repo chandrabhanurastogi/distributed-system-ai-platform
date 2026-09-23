@@ -4,4 +4,4 @@ plugins {
 
 rootProject.name = 'distributed-platform'
 
-include 'order-service', 'inventory-service', 'llm-fundamentals', 'common'
+include 'order-service', 'inventory-service', 'llm-fundamentals', 'common', 'dispute-service'
