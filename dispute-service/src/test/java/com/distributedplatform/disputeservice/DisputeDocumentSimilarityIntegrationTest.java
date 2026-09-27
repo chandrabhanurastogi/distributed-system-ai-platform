@@ -1,5 +1,6 @@
 package com.distributedplatform.disputeservice;
 
+import com.distributedplatform.disputeservice.embedding.VectorLiterals;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,8 +16,6 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import java.util.List;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -64,7 +63,7 @@ class DisputeDocumentSimilarityIntegrationTest {
                 FROM dispute_documents
                 ORDER BY distance ASC
                 """;
-        MapSqlParameterSource params = new MapSqlParameterSource("query", toVectorLiteral(queryVector));
+        MapSqlParameterSource params = new MapSqlParameterSource("query", VectorLiterals.toVectorLiteral(queryVector));
 
         List<String> rankedByNearest = jdbcTemplate.query(sql, params,
                 (rs, rowNum) -> rs.getString("text"));
@@ -91,7 +90,7 @@ class DisputeDocumentSimilarityIntegrationTest {
                 FROM dispute_documents
                 ORDER BY distance ASC
                 """;
-        MapSqlParameterSource params = new MapSqlParameterSource("query", toVectorLiteral(queryVector));
+        MapSqlParameterSource params = new MapSqlParameterSource("query", VectorLiterals.toVectorLiteral(queryVector));
 
         List<String> planLines = jdbcTemplate.query(explainSql, params,
                 (rs, rowNum) -> rs.getString("QUERY PLAN"));
@@ -110,7 +109,7 @@ class DisputeDocumentSimilarityIntegrationTest {
                 """;
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("text", text)
-                .addValue("embedding", toVectorLiteral(embedding));
+                .addValue("embedding", VectorLiterals.toVectorLiteral(embedding));
 
         jdbcTemplate.update(sql, params);
     }
@@ -119,11 +118,5 @@ class DisputeDocumentSimilarityIntegrationTest {
         double[] vector = new double[768];
         vector[axis] = value;
         return vector;
-    }
-
-    private String toVectorLiteral(double[] vector) {
-        return "[" + IntStream.range(0, vector.length)
-                .mapToObj(i -> Double.toString(vector[i]))
-                .collect(Collectors.joining(",")) + "]";
     }
 }

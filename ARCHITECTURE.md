@@ -4,7 +4,8 @@ This document reflects the **current, actual state** of the system, verified aga
 repository — not the aspirational end state. It is updated every time a milestone changes
 a service boundary, API, database, topic, or consistency guarantee (see `CLAUDE.md` Rule 7).
 
-Last verified against repo: 2026-09-23, working tree (Milestone 8.1 in progress).
+Last verified against repo: 2026-09-26, working tree (Milestones 8.1-8.2 complete,
+8.3 planned/`ADR-0010` proposed, implementation pending).
 Phase 0, Phase 6, and Phase 7 are complete; Phase 8 (Track B, RAG) is in progress.
 
 ---
@@ -184,7 +185,7 @@ then, treat it as intent, not fact.
 | `inventory-service` | Track/reserve stock; downstream in resilience experiments | `inventory_items` (own `postgres:alpine` container — ADR-0003) | Phase 0 | Persists via plain JDBC, no REST API yet |
 | `payment-service` | Third Saga participant; can succeed or fail to force compensation | `payments` (own DB) | Start of Phase 3 | Not created |
 | `notification-service` | Pure Kafka consumer, no other responsibility — kept deliberately "boring" so Phase 4 consumer-group experiments aren't confounded by unrelated logic | none (stateless relay, or a minimal delivery log) | Phase 3/4 boundary | Not created |
-| `dispute-service` | Single service hosting three phases of increasing sophistication: RAG over a combined corpus of dispute-handling policy **and** network/interchange scheme-rule documents (Phase 8, no separate "config" service — see `ROADMAP.md` Phase 8 for why); a single agent's tool-calling target, including a deterministic filing-deadline tool (Phase 10); an Investigator/Reviewer multi-agent pattern with a human-approval gate before finalizing a dispute decision (Phase 12). A fictional service modeling public payment-industry concepts, not any specific employer's actual systems (see `ROADMAP.md` two-track decision, 2026-09-14, reconfirmed 2026-09-14 after a first draft proposed a standalone service under a specific employer's actual internal system name) | reference documents + embeddings (own Postgres with `pgvector` — same database-per-service pattern as ADR-0003) | Phase 8 | In progress (Milestone 8.1) |
+| `dispute-service` | Single service hosting three phases of increasing sophistication: RAG over a combined corpus of dispute-handling policy **and** network/interchange scheme-rule documents (Phase 8, no separate "config" service — see `ROADMAP.md` Phase 8 for why); a single agent's tool-calling target, including a deterministic filing-deadline tool (Phase 10); an Investigator/Reviewer multi-agent pattern with a human-approval gate before finalizing a dispute decision (Phase 12). A fictional service modeling public payment-industry concepts, not any specific employer's actual systems (see `ROADMAP.md` two-track decision, 2026-09-14, reconfirmed 2026-09-14 after a first draft proposed a standalone service under a specific employer's actual internal system name) | reference documents + embeddings (own Postgres with `pgvector` — same database-per-service pattern as ADR-0003) | Phase 8 | In progress (Milestones 8.1-8.2 complete, 8.3 planned) |
 | `shipping-service` | TBD | TBD | **Not scheduled** — see decision note below | Not created |
 
 **Decision note on `shipping-service`:** deliberately not committed to a phase. No
@@ -268,25 +269,43 @@ similarity. `OllamaEmbeddingService` mirrors `GeminiLlmClient`'s two-constructor
 (one reading Spring `@Value` properties, one accepting a `RestClient` directly for
 test injection) rather than inventing a new pattern.
 
-**Phase 8 (RAG) started — Milestone 8.1 in progress.** New `dispute-service` module
-with its own `pgvector`-backed Postgres (`dispute-db`, real `pgvector/pgvector:pg17`
-image). A real `ORDER BY embedding <=> ?` cosine-distance query, run via plain
-`NamedParameterJdbcTemplate` (no repository class yet — ADR-0004), proven against
-hand-computed vectors with a mathematically certain expected nearest-neighbor order —
-the SQL-level equivalent of Milestone 7.1's hand-crafted-vector tests. ADR-0009 records
-two real decisions: `vector_cosine_ops` over `vector_l2_ops`/`vector_ip_ops` (cosine is
-correct regardless of whether embeddings happen to be normalized; inner product's
-correctness depends on an unenforced invariant this corpus is specifically likely to
-violate, given Phase 8's own plan to repeatedly re-embed it during chunking/retrieval
+**Phase 8 (RAG) started — Milestones 8.1-8.2 complete, 8.3 planned.** New
+`dispute-service` module with its own `pgvector`-backed Postgres (`dispute-db`, real
+`pgvector/pgvector:pg17` image). A real `ORDER BY embedding <=> ?` cosine-distance
+query proven against hand-computed vectors, plus a real `EXPLAIN ANALYZE` test
+confirming the actual query plan (`Seq Scan` feeding a `Sort` node, no index) matches
+what was traced by hand in Milestone 8.1's own interview. ADR-0009 records two real
+decisions: `vector_cosine_ops` over `vector_l2_ops`/`vector_ip_ops` (cosine is correct
+regardless of whether embeddings happen to be normalized; inner product's correctness
+depends on an unenforced invariant this corpus is specifically likely to violate,
+given Phase 8's own plan to repeatedly re-embed it during chunking/retrieval
 experiments), and no ANN index yet (IVFFlat cannot be built meaningfully against
-near-empty data; adding either index type with zero measured latency numbers would be
-the same category of mistake as fabricating a benchmark). No document corpus, no
-chunking, no retrieval logic, no LLM involvement yet — this milestone only proves the
-storage/query primitive works.
+near-empty data).
 
-Full RAG pipeline (ingestion, chunking, embedding, indexing, retrieval, reranking,
-context construction, answer generation) remains empty until later Phase 8 milestones
-are active, per Rule 5. No agents, no MCP, no multi-agent orchestration yet either.
+**Milestone 8.2:** `DisputeDocumentRepository` (the repository class that finally
+earned its place, per ADR-0004, once a real caller existed), `OllamaEmbeddingService`
+(a local, duplicated copy of `llm-fundamentals`'s class — tracked debt, not fixed),
+and `DisputeDocumentIngestionService.ingest(String)` composing chunk → embed → store
+for one real document, proven end-to-end: a real filing-deadline question correctly
+retrieves the filing-deadline paragraph as the top result. A real bug was found and
+fixed while adding this milestone's unit test: a record's auto-generated `equals()`
+compares array-typed fields (`double[] embedding`) by reference, not contents — the
+first test version only appeared to verify the right embedding was saved because the
+same array instance happened to flow through both sides of the comparison. Fixed via
+`ArgumentCaptor` and direct array-content assertions instead of trusting the record's
+`equals()`.
+
+**Milestone 8.3 (planned, `ADR-0010` proposed, not yet implemented):** a scheduled
+(cron, not Kafka — Kafka isn't scheduled to exist in this codebase until after Phase 8
+in the real execution order) batch ingestion pipeline: a `source_documents` tracking
+table for content-hash-based idempotency, per-document failure isolation via one
+`@Transactional` method covering the whole reprocess-a-document sequence, and a
+dedicated `ingestionRunId` MDC key (distinct from the HTTP-scoped `correlationId`,
+which a scheduled job has no inbound request to inherit).
+
+Full RAG pipeline (indexing, retrieval, reranking, context construction, answer
+generation) remains empty until later Phase 8 milestones are active, per Rule 5. No
+agents, no MCP, no multi-agent orchestration yet either.
 
 ---
 
@@ -307,3 +326,4 @@ are active, per Rule 5. No agents, no MCP, no multi-agent orchestration yet eith
 | 2026-09-20 | Milestone 7.1 complete. New package `com.distributedplatform.llmfundamentals.vector` (deliberately a package, not a new module — a logical boundary, not yet a demonstrated architectural one) holds `VectorMath` (`dotProduct`, `magnitude`, `cosineSimilarity`, hand-implemented, unit-tested, zero framework/library dependency) and three named exceptions (ADR-0008: `EmptyVectorException`, `VectorDimensionMismatchException`, `ZeroVectorException` — one per genuinely distinct invalid-input condition, not one generic exception). Real design deliberation, not a rubber-stamped default: whether cosine similarity of a zero-magnitude vector should throw or return a sentinel `0.0` was worked through explicitly, landing on "mathematics says undefined, throwing is the correct representation for this milestone's purpose" rather than the stronger, incorrect claim "throwing is mathematically required." Two real bugs found and fixed during review: a dead, unused exception constructor with a `-1` sentinel default (the same category of mistake recurring a second time after being corrected once already); and `magnitude(null)` leaking `dotProduct`'s internal parameter name (`'a'`) into its own error message before being given its own null check. Duplicated null/empty/dimension-mismatch validation between `dotProduct` and `cosineSimilarity` was extracted into a shared private `validatePair` helper once the duplication was real and demonstrated, not speculative. |
 | 2026-09-22 | Milestone 7.2 complete. New sibling package `com.distributedplatform.llmfundamentals.embedding` calls a real local embedding model (`nomic-embed-text`, 768 dimensions, confirmed empirically to normalize to ~unit magnitude) and performs brute-force retrieval over a plain in-memory `List<Document>` — a proposed `Map`-as-cache "swap for a vector DB later" design was corrected: brute-force search touches every entry regardless of container, so a `Map`'s real advantage (O(1) keyed lookup) goes unused, and building an interface now to swap later would repeat the exact premature-abstraction pattern ADR-0006 already rejected once. Real end-to-end proof: 8 real sentences (4 distributed-systems, 4 baking) embedded and ranked against a real query, with all 4 distributed-systems documents scoring strictly above all 4 baking documents — the first genuine composition of Milestone 7.1's hand-verified math with a real embedding model producing a human-interpretable result. A real 50x latency anomaly (14,308ms vs. an expected ~35ms/sentence) was investigated rather than reported blindly: root-caused to Ollama unloading the model from memory during idle time, confirmed by re-running immediately afterward (217ms) — both the cold-start and steady-state numbers are recorded, since the distinction is itself a real characteristic of locally-hosted model serving. |
 | 2026-09-23 | Phase 8 (RAG) started, Milestone 8.1 in progress. New `dispute-service` module and `dispute-db` (real `pgvector/pgvector:pg17` image, not stock Postgres). ADR-0009 records two decisions: `vector_cosine_ops` over `vector_l2_ops` (wrong semantic tool — conflates magnitude and direction) or `vector_ip_ops` (correctness depends on an unenforced unit-length invariant this corpus is specifically likely to violate, given Phase 8's plan to repeatedly re-embed it during chunking/retrieval experiments — the same mixed-normalization risk as `BruteForceRetriever`'s mixed-dimensionality finding, relocated into a database index); and no ANN index yet (IVFFlat cannot be built meaningfully against near-empty data, and adding either index type with zero measured latency numbers would repeat Rule 9's "don't fabricate" discipline against an architectural choice instead of a number). A real cosine-distance query proven correct via hand-computed vectors, the SQL-level equivalent of Milestone 7.1's tests. Two closing milestones sketched (not detailed, per Rule 5) for later in the roadmap: a LangChain translation at the end of Phase 8, and a LangGraph translation at the end of Phase 12 — prompted by an explicit strategic check-in on this project's Java-only stack versus the industry's Python-centric AI tooling; resolved as "keep the current plan, add scoped real-framework exposure once each phase's concepts are hand-built," not a pivot. |
+| 2026-09-26 | Milestone 8.2 complete: chunk → embed → store wired end-to-end for one real document (`DisputeDocumentIngestionService.ingest`), proven against a real filing-deadline question retrieving the correct paragraph. A real bug found while adding this milestone's unit test: `DisputeDocument`'s record-generated `equals()` compares `double[] embedding` by reference, not contents, since arrays never override `Object.equals()` — the first test version only appeared to verify saved embeddings correctly because the same array instance flowed through both sides of the comparison; fixed via `ArgumentCaptor` and direct `Arrays`-aware assertions. `OllamaEmbeddingService` confirmed duplicated (not reused) from `llm-fundamentals`, tracked as debt per an explicit user decision, not fixed. Milestone 8.3 planned (via a Claude Code Plan Mode session) and migrated into this project's own documentation immediately after approval — Plan Mode writes to a fixed external scratch location outside the repo, which is not this project's source of truth; `ADR-0010` records the real design decisions (filesystem-over-table source of truth, cron over fixed-delay, a dedicated `ingestionRunId` MDC key distinct from the HTTP-scoped `correlationId`) and a transactional-consistency bug found and fixed before any implementation code was written. |

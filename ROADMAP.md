@@ -1219,25 +1219,57 @@ abstract "did it find the right paragraph."
   technical interviewer will specifically probe for, not a feature.
 
 Introduces `dispute-service` as a new deployable service with its own Postgres
-(`dispute-db`, `pgvector` extension — same database-per-service pattern as ADR-0003)
-and, per the human's own architectural instinct, decoupled from any synchronous
-request path via the same async/event-driven pattern Kafka is already scheduled to
-introduce at Phase 3/4 — heavy AI work (embedding, retrieval) has no business blocking
-a REST response.
+(`dispute-db`, `pgvector` extension — same database-per-service pattern as ADR-0003).
+
+**Ingestion decoupling decision, revised 2026-09-25 (was: "same async/event-driven
+pattern as Kafka"):** the actual decided execution order (Phase 6 → 7 → 1 → 2 → 8 → 10)
+places Phase 8 *before* Phase 3/4, which are explicitly not yet placed in that ordering
+— meaning Kafka will not exist in this codebase by the time Phase 8's ingestion work
+happens. Pulling a real Kafka setup forward into Phase 8 was considered and rejected:
+Phase 4 exists specifically to teach real Kafka mechanics (consumer groups, partitions,
+offsets, delivery semantics) in its own dedicated context, and standing up a shallow
+version now, before that milestone has taught what actually matters about it, would be
+introducing real operational complexity without the learning reason `CLAUDE.md`
+requires for any new technology. Decided instead: a **scheduled (cron-style) batch
+ingestion job** — genuinely the correct production pattern here, not a lesser
+substitute, since this corpus (policy/scheme-rule documents) changes on the order of
+days or weeks, not seconds, and "heavy AI work has no business blocking a REST
+response" is satisfied exactly as well by a background job as by a message queue. A
+fully productionized version of this (not just a proof-of-mechanics test) is an
+explicit goal for the remainder of Phase 8: a real scheduled trigger, idempotent
+reprocessing (re-running must not re-embed/duplicate unchanged documents — needs a
+real change-detection mechanism, e.g. a content hash), per-document failure isolation
+(one document failing to embed must not block or poison the rest of the run), and real
+observability (success/failure counts per run, correlation-ID-tagged logging). Revisit
+Kafka for `dispute-service` specifically only if a genuine low-latency ingestion need
+surfaces later (most plausibly from Phase 10/12's agents needing to react to something
+just filed) — not before.
 
 **Closing milestone, sketched now, detailed once the rest of Phase 8 is done
-(2026-09-23):** after the full ingestion→chunking→embedding→indexing→retrieval→
-answer pipeline is hand-built and understood, a scoped translation of that
-already-understood pipeline into real LangChain (Python) idioms — not a parallel
-rewrite, not started until the hand-built version exists, specifically to build real
-tool-name fluency with a library many real RAG job descriptions name directly. Same
-"raw mechanics first, framework second" sequencing this project has used everywhere
-else (raw HTTP before `LlmClient`, brute-force before `pgvector`). Prompted by an
-explicit strategic check-in: this project is Java-only while much of the industry's
-AI/RAG tooling is Python-centric; the conclusion reached was that the *concepts*
-being learned are language-agnostic and arguably a stronger Staff-level signal than
-framework fluency alone, but that real, scoped exposure to the actual named tools is
-still worth adding deliberately, once, rather than never or as a full rewrite.
+(revised 2026-09-25, was: LangChain/Python):** after the full ingestion→chunking→
+embedding→indexing→retrieval→answer pipeline is hand-built and understood, a scoped
+adoption of **Spring AI** — its `ChatClient`, `VectorStore`/`PgVectorStore`, and RAG
+`Advisor` abstractions — over the hand-built equivalents, staying in Java. Decided
+over Python + LangChain (the original idea from the 2026-09-23 strategic check-in)
+once Spring AI itself came up as the more directly relevant answer: it's the framework
+a real Java/Spring RAG system would actually reach for, integrates with everything
+this project already uses (no new language, no new runtime), and this project already
+named Spring AI as its eventual destination back in Phase 6's own sequencing decision.
+Same "raw mechanics first, framework second" sequencing this project has used
+everywhere else (raw HTTP before `LlmClient`, brute-force before `pgvector`) — not
+started until the hand-built version exists, and explicitly a comparison exercise,
+not a replacement: `dispute-service`'s real, running ingestion/retrieval pipeline
+stays the hand-built Java version; a Spring AI reimplementation is a separate,
+bounded exercise to see what the framework abstracts, not something the production
+path depends on.
+
+**Open, deliberately unresolved for now:** Phase 12's equivalent closing-milestone
+question (LangGraph) doesn't have as clean an answer — Spring AI's territory matches
+LangChain's (chat clients, vector stores, RAG), but there is no comparably mature,
+mainstream Java-native equivalent to LangGraph's stateful multi-agent graph
+orchestration. Per Rule 5, this is left open rather than decided now — revisit once
+Phase 12 is actually active and the Java ecosystem can be checked for real, current
+options at that time, rather than guessed at now.
 
 ### Milestone 8.1 — `dispute-service` scaffolding + `pgvector` proven
 
@@ -1323,6 +1355,181 @@ index.
 
 ---
 
+### Milestone 8.2 — Chunk → embed → store, wired end-to-end for one real document
+
+**Status: Complete — 2026-09-26**
+
+- [x] `DisputeDocument(String text, double[] embedding)` — a local record, deliberately
+      not depending on `llm-fundamentals`'s equivalent (no cross-module dependency
+      warranted for one small record)
+- [x] `DisputeDocumentRepository.save(DisputeDocument)` — the repository class that
+      finally earned its place per Milestone 8.1's own Q4 reasoning, now that a real
+      caller (an ingestion service) exists
+- [x] `OllamaEmbeddingService` + DTOs, real calls to Ollama's `/api/embed` — see the
+      real, tracked issue below
+- [x] `VectorLiterals.toVectorLiteral(double[])` — extracted from what was inline,
+      duplicated code in Milestone 8.1's test, now shared by the repository and both
+      test classes, once a real second/third demonstrated need existed (the same
+      3x-repeat discipline ADR-0006 established)
+- [x] `DisputeDocumentIngestionService.ingest(String documentText)` — chunks via
+      `BoundedSentenceChunker`, embeds each chunk, saves each one
+- [x] `DisputeDocumentIngestionIntegrationTest` — real end-to-end proof: the real
+      `cardholder-dispute-policy.txt` document ingested through the real pipeline
+      (real Ollama, real Testcontainers `pgvector/pgvector:pg17`), then a realistic
+      question ("How many days do I have to file a chargeback dispute?") correctly
+      retrieves the filing-deadline paragraph as the top result — a genuine semantic
+      assertion, not just "it ran." Real numbers: 3 chunks ingested in 666ms
+      (222ms/chunk).
+- [x] A second test added to `DisputeDocumentSimilarityIntegrationTest`, beyond what
+      was asked: `explainAnalyze_withNoIndexOnEmbedding_showsSeqScanFeedingASortNode`
+      — runs a real `EXPLAIN ANALYZE` and asserts the actual query plan contains
+      `Seq Scan on dispute_documents` and `Sort`, turning Milestone 8.1's own Q2
+      interview answer (traced by hand) into a permanent, automated regression test.
+      Genuinely good initiative, not something asked for.
+- [x] `OllamaEmbeddingServiceTest` — a `@ParameterizedTest`/`@NullAndEmptySource`
+      `MockRestServiceServer` test covering both the null- and empty-embeddings
+      failure branches in one method (consolidating what `llm-fundamentals`'s
+      equivalent test still leaves as two)
+- [x] `DisputeDocumentIngestionServiceTest` — a pure, mock-based unit test proving the
+      orchestration logic itself (chunk → embed each → save each, in order), with a
+      deliberately-constructed exactly-`MAX_CHUNK_SIZE` sentence to make the chunk
+      split deterministic without re-verifying chunking correctness (already owned by
+      `BoundedSentenceChunkerTest`)
+
+**Real issue found during review, tracked as debt, not fixed here (explicit user
+decision):** `OllamaEmbeddingService` was re-implemented from scratch inside
+`dispute-service` rather than reused from `llm-fundamentals` via a
+`project(':llm-fundamentals')` dependency — the same client class and two DTOs now
+exist in two modules with no shared abstraction. Confirmed present, tracked
+separately per the user's explicit choice during Milestone 8.3's planning, not
+addressed in this milestone.
+
+**A real bug found and fixed while adding `DisputeDocumentIngestionServiceTest`:**
+the first version verified `repository.save(...)` was called correctly by
+reconstructing an expected `DisputeDocument` and relying on its record-generated
+`equals()`. That only appeared to work — a record's auto-generated `equals()` compares
+array-typed components (`double[] embedding`) by *reference*, not contents, since
+arrays never override `Object.equals()`. The test only passed because the exact same
+array instance flowed through both the mocked return value and the reconstructed
+expectation; a `double[]` with equal values but a different identity would have
+silently failed, or silently stopped verifying anything if production code ever
+cloned the array. Fixed by stubbing with `any(DisputeDocument.class)` and verifying via
+`ArgumentCaptor`, asserting on the captured document's `text()` and `embedding()`
+(via AssertJ's `containsExactly`, genuine element-wise array comparison) directly,
+rather than trusting the record's `equals()` to do a deep comparison it doesn't
+actually do.
+
+`ingest()`'s complete lack of tested failure behavior (a mid-run embedding failure
+today leaves partial, untransacted work with no isolation) is **not** a gap fixed
+here — Milestone 8.3's `reingestFromSource` is specifically designed to replace this
+exact concern for the real, tracked pipeline; `ingest()` stays as the
+explicitly-scoped manual/ad-hoc path.
+
+**Explicitly out of scope for 8.2:** no scheduling, no idempotency, no failure
+isolation, no observability beyond what a single real end-to-end test happens to log
+— all of that is Milestone 8.3.
+
+---
+
+### Milestone 8.3 — Productionized scheduled batch ingestion (planned, not yet built)
+
+**Status: Planned 2026-09-26 (via a Plan Mode session), implementation pending**
+
+**A documentation-process note worth recording precisely:** this milestone's design
+was produced via Claude Code's Plan Mode, which writes its working draft to a fixed
+location outside this repository (`~/.claude/plans/...`) as a tool-level scratch
+artifact, not a project decision. That file is **not** the source of truth — this
+section is, migrated in immediately after approval so the actual reasoning lives in
+the same place every other milestone's does. Treat any future Plan Mode output the
+same way: useful for drafting and getting approval, not itself part of the project's
+documentation.
+
+**Prerequisite decision, made explicitly before this milestone was designed:** Kafka
+was considered for decoupling ingestion from any synchronous path and rejected for
+now — see Phase 8's own intro section above for the full reasoning (the real execution
+order places Phase 8 before Phase 3/4, so Kafka doesn't exist yet in this codebase;
+pulling it forward would mean teaching it shallowly before its own dedicated
+milestone). A scheduled (cron) batch job was chosen instead, matching this corpus's
+actual change frequency (days/weeks, not seconds).
+
+**Task breakdown:**
+- [ ] `V2__create_source_documents_table.sql` — a new `source_documents(id,
+      source_identifier, content_hash, ingested_at)` tracking table, plus a nullable
+      `source_document_id` FK on `dispute_documents` (nullable so the existing
+      `ingest(String)` path keeps working unchanged)
+- [ ] `ContentHasher.sha256Hex(String)` — pure, unit-tested
+- [ ] `SourceDocumentScanner.scan(Path)` — flat directory scan for `.txt` files,
+      unit-tested with `@TempDir`
+- [ ] `SourceDocument` record + `SourceDocumentRepository` (find/insert/update-hash)
+- [ ] `DisputeDocumentRepository` gains `deleteBySourceDocumentId`
+- [ ] `DisputeDocumentIngestionService.reingestFromSource(sourceIdentifier,
+      documentText, contentHash)` — **one `@Transactional` method** owning the whole
+      sequence: check-if-unchanged, upsert the tracking hash, delete stale chunks,
+      insert new ones (see the bug fix below for why this must be one transaction,
+      not several)
+- [ ] `DisputeCorpusIngestionRunner` — the directly-callable orchestration logic
+      (scan → per-document try/catch → summary), with a fresh `ingestionRunId` MDC key
+      per run (not the HTTP-scoped `correlationId`, which a `@Scheduled` method has no
+      inbound request to inherit)
+- [ ] `ScheduledIngestionTrigger` — a thin `@Scheduled(cron = ...)` wrapper around the
+      runner; `@EnableScheduling` added to `DisputeServiceApplication` (first use of
+      Spring scheduling in this repo)
+- [ ] Config: `dispute.ingestion.cron` (base `application.yml`), `dispute.ingestion.
+      source-directory` (`application-local.yml`, pointing at a new real runtime
+      directory `dispute-service/dispute-documents/`, seeded with a committed copy of
+      `cardholder-dispute-policy.txt` so the pipeline has real content immediately)
+- [ ] Tests: `ContentHasherTest`, `SourceDocumentScannerTest` (fast, no real
+      `@Scheduled` wait); a real Testcontainers idempotency test (unchanged → skipped,
+      changed → old chunks replaced with new ones, verified by ID); a real
+      Testcontainers failure-isolation test (one document with deliberately invalid
+      UTF-8 bytes doesn't block a second, good document in the same run — chosen to
+      fail *before* the `@Transactional` boundary specifically to avoid a real Spring
+      test-transaction-propagation pitfall, not a production concern, explained below);
+      log-output assertions via `OutputCaptureExtension` proving the real summary
+      counts and `ingestionRunId` actually appear in structured output
+- [ ] ADR-0010 (see below)
+
+**Real architectural decisions, each requiring genuine reasoning:**
+1. **Filesystem directory, not a new raw-document table, as the source of truth.**
+   Nothing in this project currently authors documents into a database — no upload
+   mechanism, no admin UI. A raw-content table would be a second, currently-unpopulated
+   source of truth for bytes the filesystem already holds, on pure speculation — the
+   same reasoning ADR-0009 used to reject an index and Milestone 8.1's Q4 used to
+   reject an early repository class. The smaller **tracking** table (hash + timestamp,
+   no content) is a materially different, genuinely needed piece of state, and does
+   earn its place.
+2. **Cron, not fixed-delay.** This corpus changes on a calendar cadence, which `cron`
+   expresses directly; `fixedDelay` is the right tool for a tight polling loop with no
+   calendar semantics, which this isn't.
+3. **A distinct `ingestionRunId` MDC key, not reused `correlationId`.**
+   `CorrelationIdFilter` is Servlet-`Filter`-based, populated from an inbound HTTP
+   header — a `@Scheduled` method has no inbound request to inherit one from, so
+   reusing that key would conflate a per-HTTP-request identifier with a
+   never-cross-service-propagated batch-run identifier under one log field.
+4. **Per-document failure isolation via `@Transactional`, not just try/catch.** A
+   caught-but-untransacted failure would still leave a document half-migrated; a
+   transactional one leaves it in its last-known-good state if anything inside fails.
+
+**A real bug found and fixed during design, before any code was written:** the first
+draft had the ingestion runner update `source_documents.content_hash` to the new hash
+*before* calling the transactional re-ingestion method. If embedding failed partway
+through, that method's transaction would roll back the chunk changes — but the hash
+update, made as a separate prior write, would already be committed. A failed
+re-ingestion would be permanently mis-marked as successful and silently skipped on
+every future run. Fixed by moving the hash upsert *inside* the one transactional
+method, so any failure anywhere in the sequence rolls back everything, hash included.
+
+**Explicitly out of scope for 8.3, named so it doesn't quietly creep back in:** no
+concurrency guard between overlapping runs beyond Spring's default single-threaded
+scheduler (no manual trigger exists yet for one to race against); no cleanup when a
+`.txt` file is removed from the source directory (only create/change is handled); no
+B-tree index on `dispute_documents.source_document_id` (same "no index before a
+measured need" discipline as ADR-0009); no recursive/subdirectory scanning (flat scan
+for now — revisit once Phase 8's second document category needs real directory
+structure).
+
+---
+
 ## Phase 9 — GraphRAG
 
 **Goal:** Neo4j-backed knowledge graph (entity extraction → relationship extraction →
@@ -1402,14 +1609,19 @@ agent (Phase 10) must first be shown insufficient for this exact task, concretel
 undifferentiated pass, with no independent check before a human sees it) — not
 assumed insufficient because multi-agent sounds more sophisticated.
 
-**Closing milestone, sketched now, detailed once the rest of Phase 12 is done
-(2026-09-23):** once the Investigator/Reviewer pattern is hand-built in Java and its
-state/nodes/edges/routing mechanics are genuinely understood, a scoped translation of
-that same pattern into the real LangGraph (Python) library — the direct counterpart to
-Phase 8's closing LangChain milestone, and the more directly relevant of the two given
-this phase's name and subject matter. Not started until the hand-built version exists;
-the point is comparing a real framework's API against a mental model already earned by
-building it manually, not learning LangGraph from a standing start.
+**Closing milestone, sketched now, detailed once the rest of Phase 12 is done —
+framework choice deliberately left open (revised 2026-09-25):** once the
+Investigator/Reviewer pattern is hand-built in Java and its state/nodes/edges/routing
+mechanics are genuinely understood, a scoped comparison against a real framework —
+originally sketched as Python + LangGraph, revisited once Phase 8's equivalent
+question resolved to Spring AI instead (see Phase 8's closing milestone), since Spring
+AI has no comparably mature Java-native equivalent to LangGraph's stateful
+multi-agent graph orchestration specifically. Per Rule 5, not decided now: revisit
+once Phase 12 is actually active and the real, current state of the Java ecosystem
+can be checked, rather than guessed at from here. Whatever framework (or absence of
+one) is chosen, the same rule applies as Phase 8's: not started until the hand-built
+version exists, and a comparison exercise only — never something the real
+`dispute-service` Investigator/Reviewer pipeline depends on.
 
 Detailed milestones written when Phase 10 is complete.
 

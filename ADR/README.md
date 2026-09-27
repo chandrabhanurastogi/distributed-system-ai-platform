@@ -43,3 +43,4 @@ Why the other options lost — specifically, not just "we preferred X."
 | [0007](0007-llmclient-stateless-interface.md) | `LlmClient` is a stateless, full-history-per-call interface | Accepted |
 | [0008](0008-vector-math-error-representation.md) | Represent invalid/undefined vector operations as named exceptions, not sentinel values | Accepted |
 | [0009](0009-pgvector-operator-and-index-deferral.md) | `dispute-service` uses `vector_cosine_ops`, no ANN index yet | Accepted |
+| [0010](0010-scheduled-ingestion-design.md) | Scheduled dispute corpus ingestion — source of truth, idempotency, and run correlation | Proposed |
