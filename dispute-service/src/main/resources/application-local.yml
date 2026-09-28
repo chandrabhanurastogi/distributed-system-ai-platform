@@ -3,3 +3,7 @@ spring:
     url: jdbc:postgresql://localhost:5435/dispute-db
     username: dispute
     password: dispute
+
+dispute:
+  ingestion:
+    source-directory: dispute-documents

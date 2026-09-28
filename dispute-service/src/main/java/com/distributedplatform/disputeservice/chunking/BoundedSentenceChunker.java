@@ -1,5 +1,7 @@
 package com.distributedplatform.disputeservice.chunking;
 
+import org.springframework.stereotype.Component;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -13,6 +15,7 @@ import java.util.regex.Pattern;
  * (sentence-grouping, then one raw character-count cut), not the general recursive
  * paragraph/sentence/word/character strategy Phase 8 compares later.
  */
+@Component
 public class BoundedSentenceChunker {
 
     private static final Pattern SENTENCE_BOUNDARY = Pattern.compile("(?<=[.!?])\\s+");

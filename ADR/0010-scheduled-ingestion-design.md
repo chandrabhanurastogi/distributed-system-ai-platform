@@ -1,7 +1,8 @@
 # ADR-0010: Scheduled dispute corpus ingestion — source of truth, idempotency, and run correlation
 
-Status: Proposed (design complete, implementation pending — see `ROADMAP.md` Milestone 8.3)
-Date: 2026-09-26
+Status: Accepted
+Date: 2026-09-26, revised 2026-09-28 to reflect what was actually implemented and
+verified (see `ROADMAP.md` Milestone 8.3) rather than only the original design
 
 ## Context
 
@@ -50,6 +51,21 @@ direct lookup, and makes "replace this document's chunks" a clean
 specifically so the existing `ingest(String)` method (Milestone 8.2, kept as the
 manual/ad-hoc path) keeps working completely unchanged.
 
+**FK delete behavior, decided during implementation, not originally deliberate:** the
+migration as written omits `ON DELETE CASCADE` (an earlier draft of this ADR specified
+it), so Postgres's default applies — deleting a `source_documents` row while
+`dispute_documents` rows still reference it fails with a foreign-key violation rather
+than silently cascading. Reviewed after the fact and kept deliberately, not fixed:
+this matches the same explicit-over-implicit principle `ADR-0004` already established
+for this project (plain JDBC over JPA specifically to keep database operations
+visible rather than hidden behind framework-managed automatic behavior). A `CASCADE`
+delete would let one `DELETE` on a parent row silently discard every chunk row that
+depended on it as an invisible side effect; the current default forces whoever
+eventually builds document-deletion (out of scope for this milestone) to delete the
+dependent chunks as an explicit, visible step first. Revisit only if that future
+deletion feature finds the explicit two-step delete genuinely burdensome in practice,
+not preemptively.
+
 ## Decision 3 — Cron, not fixed-delay
 
 **Options considered:** `@Scheduled(fixedDelay = ...)` vs. `@Scheduled(cron = ...)`.
@@ -74,6 +90,22 @@ two genuinely different concepts under one log field — a per-HTTP-request iden
 this project already treats as something propagated via a header, versus a per-batch-
 run identifier that never leaves this process. A fresh `UUID`, generated at the start
 of each run and removed in a `finally`, keeps them distinct.
+
+## Decision 5 — `reingestFromSource` returns a typed `IngestionOutcome`, not `void`
+
+**Options considered:** (a) `void`, with the caller inferring "no exception means
+success" and having no way to distinguish a freshly re-embedded document from one
+skipped as unchanged; (b) a two-value enum, `IngestionOutcome { INGESTED,
+SKIPPED_UNCHANGED }`, returned by `reingestFromSource` and consumed by the runner.
+
+**Decision:** (b), found necessary during implementation review, not part of the
+original design. With `void`, `DisputeCorpusIngestionRunner` had no way to tell these
+two cases apart — a run where every document was freshly re-embedded and a run where
+every document was skipped as unchanged both produced an identical summary
+(`succeeded=N, failed=0`). That directly undermines this ADR's own stated goal: real
+observability into what a run actually did. An enum is enough — no need for a richer
+result type — since there are exactly two non-failure outcomes and the runner only
+ever needs to increment one of two counters based on which one came back.
 
 ## A Bug Found During Design, and Its Fix
 
@@ -108,6 +140,16 @@ everything, hash included, so a failed attempt is never mistaken for a successfu
 - No index on `dispute_documents.source_document_id` — same "no index before a
   measured need" discipline as ADR-0009, applied consistently rather than assumed to
   only apply to the original decision it was written for.
+- `BoundedSentenceChunker` (Milestone 8.2) and `SourceDocumentScanner` (this milestone)
+  were both changed from field-initialized (`new X()` hardcoded directly on the field)
+  to real `@Component` beans, constructor-injected into `DisputeDocumentIngestionService`
+  and `DisputeCorpusIngestionRunner` respectively — not an architectural decision on
+  its own, but a real, demonstrated pattern (the same hardcoding choice recurring a
+  second time across two milestones) fixed for consistency and testability once it
+  stopped being a one-off. `DisputeDocumentIngestionServiceTest` deliberately still
+  passes a real `BoundedSentenceChunker` rather than a mock, since that test's
+  determinism depends on real chunking behavior — making a dependency injectable
+  doesn't obligate every caller to fake it.
 
 ## Rejected Alternatives
 
@@ -122,3 +164,9 @@ everything, hash included, so a failed attempt is never mistaken for a successfu
 - **Reusing `correlationId` for the run ID**: rejected — mechanically impossible to
   populate from a `@Scheduled` context the way it's currently wired, and conceptually
   conflates two different kinds of identifier even if it were wired to work.
+- **`void` return from `reingestFromSource`**: rejected once its consequence was
+  noticed during review — it silently erases the skipped/ingested distinction this
+  ADR itself requires the run summary to report.
+- **`ON DELETE CASCADE`**: rejected on review, in favor of the project's established
+  explicit-over-implicit principle — an automatic cascading delete would hide a real,
+  potentially destructive side effect behind an innocuous-looking single-table delete.

@@ -1429,11 +1429,19 @@ explicitly-scoped manual/ad-hoc path.
 isolation, no observability beyond what a single real end-to-end test happens to log
 — all of that is Milestone 8.3.
 
+**Process gap, recorded rather than silently corrected (2026-09-28):** this milestone
+was marked complete without the formal closing interview `CLAUDE.md`'s milestone cycle
+requires — missed by the assistant, not a shortcut requested by the human. Discovered
+during Milestone 8.3's close-out. The human explicitly chose not to do it
+retroactively and to move forward instead, rather than have it silently fixed after
+the fact. Recorded here as a real, permanent gap in this project's history, not
+erased or fabricated after the fact to look complete.
+
 ---
 
-### Milestone 8.3 — Productionized scheduled batch ingestion (planned, not yet built)
+### Milestone 8.3 — Productionized scheduled batch ingestion
 
-**Status: Planned 2026-09-26 (via a Plan Mode session), implementation pending**
+**Status: Complete — 2026-09-28**
 
 **A documentation-process note worth recording precisely:** this milestone's design
 was produced via Claude Code's Plan Mode, which writes its working draft to a fixed
@@ -1453,41 +1461,44 @@ milestone). A scheduled (cron) batch job was chosen instead, matching this corpu
 actual change frequency (days/weeks, not seconds).
 
 **Task breakdown:**
-- [ ] `V2__create_source_documents_table.sql` — a new `source_documents(id,
+- [x] `V2__create_source_documents_table.sql` — `source_documents(id,
       source_identifier, content_hash, ingested_at)` tracking table, plus a nullable
       `source_document_id` FK on `dispute_documents` (nullable so the existing
       `ingest(String)` path keeps working unchanged)
-- [ ] `ContentHasher.sha256Hex(String)` — pure, unit-tested
-- [ ] `SourceDocumentScanner.scan(Path)` — flat directory scan for `.txt` files,
-      unit-tested with `@TempDir`
-- [ ] `SourceDocument` record + `SourceDocumentRepository` (find/insert/update-hash)
-- [ ] `DisputeDocumentRepository` gains `deleteBySourceDocumentId`
-- [ ] `DisputeDocumentIngestionService.reingestFromSource(sourceIdentifier,
-      documentText, contentHash)` — **one `@Transactional` method** owning the whole
+- [x] `ContentHasher.sha256Hex(String)` — pure, unit-tested, including a known test
+      vector checked against a real `shasum -a 256` run, not recalled from memory
+- [x] `SourceDocumentScanner.scan(Path)` — flat directory scan for `.txt` files,
+      unit-tested with `@TempDir`; now a real `@Component` bean (see below)
+- [x] `SourceDocument` record + `SourceDocumentRepository` (find/insert/update-hash)
+- [x] `DisputeDocumentRepository` gains `deleteBySourceDocumentId`
+- [x] `DisputeDocumentIngestionService.reingestFromSource(sourceIdentifier,
+      documentText, contentHash)` — one `@Transactional` method owning the whole
       sequence: check-if-unchanged, upsert the tracking hash, delete stale chunks,
-      insert new ones (see the bug fix below for why this must be one transaction,
-      not several)
-- [ ] `DisputeCorpusIngestionRunner` — the directly-callable orchestration logic
+      insert new ones
+- [x] `DisputeCorpusIngestionRunner` — the directly-callable orchestration logic
       (scan → per-document try/catch → summary), with a fresh `ingestionRunId` MDC key
-      per run (not the HTTP-scoped `correlationId`, which a `@Scheduled` method has no
-      inbound request to inherit)
-- [ ] `ScheduledIngestionTrigger` — a thin `@Scheduled(cron = ...)` wrapper around the
+      per run
+- [x] `ScheduledIngestionTrigger` — a thin `@Scheduled(cron = ...)` wrapper around the
       runner; `@EnableScheduling` added to `DisputeServiceApplication` (first use of
       Spring scheduling in this repo)
-- [ ] Config: `dispute.ingestion.cron` (base `application.yml`), `dispute.ingestion.
-      source-directory` (`application-local.yml`, pointing at a new real runtime
-      directory `dispute-service/dispute-documents/`, seeded with a committed copy of
-      `cardholder-dispute-policy.txt` so the pipeline has real content immediately)
-- [ ] Tests: `ContentHasherTest`, `SourceDocumentScannerTest` (fast, no real
-      `@Scheduled` wait); a real Testcontainers idempotency test (unchanged → skipped,
-      changed → old chunks replaced with new ones, verified by ID); a real
-      Testcontainers failure-isolation test (one document with deliberately invalid
-      UTF-8 bytes doesn't block a second, good document in the same run — chosen to
-      fail *before* the `@Transactional` boundary specifically to avoid a real Spring
-      test-transaction-propagation pitfall, not a production concern, explained below);
-      log-output assertions via `OutputCaptureExtension` proving the real summary
-      counts and `ingestionRunId` actually appear in structured output
-- [ ] ADR-0010 (see below)
+- [x] Config: `dispute.ingestion.cron` (base `application.yml`), `dispute.ingestion.
+      source-directory` (`application-local.yml`, pointing at
+      `dispute-service/dispute-documents/`, seeded with a committed copy of
+      `cardholder-dispute-policy.txt`)
+- [x] Tests: `ContentHasherTest`, `SourceDocumentScannerTest`; a real Testcontainers
+      idempotency test (`DisputeDocumentReingestionIntegrationTest` — unchanged →
+      skipped, changed → old chunks replaced, verified by chunk ID, not just row
+      counts); a real Testcontainers failure-isolation test
+      (`DisputeCorpusIngestionRunnerFailureIsolationIntegrationTest` — one document
+      with deliberately invalid UTF-8 bytes doesn't block a good one in the same run,
+      chosen to fail *before* the `@Transactional` boundary to sidestep a real Spring
+      test-transaction-propagation pitfall, not a production concern); a further test
+      added during review, `DisputeCorpusIngestionRunnerSkipTrackingIntegrationTest`
+      (see the real gap found below); log-output assertions via `OutputCaptureExtension`
+      proving the real summary counts and `ingestionRunId` actually appear in
+      structured output
+- [x] ADR-0010, revised after implementation to match what was actually built, not
+      only the original design
 
 **Real architectural decisions, each requiring genuine reasoning:**
 1. **Filesystem directory, not a new raw-document table, as the source of truth.**
@@ -1509,6 +1520,41 @@ actual change frequency (days/weeks, not seconds).
 4. **Per-document failure isolation via `@Transactional`, not just try/catch.** A
    caught-but-untransacted failure would still leave a document half-migrated; a
    transactional one leaves it in its last-known-good state if anything inside fails.
+5. **`reingestFromSource` returns a typed `IngestionOutcome` enum (`INGESTED`,
+   `SKIPPED_UNCHANGED`), not `void` — a real gap found during implementation review,
+   not part of the original design.** With `void`, the runner had no way to tell "just
+   freshly re-embedded" from "skipped as unchanged" — both incremented the same
+   counter, producing an identical `succeeded=N, failed=0` summary either way. That
+   directly undermined this milestone's own stated observability goal. Closed by a
+   new test, `DisputeCorpusIngestionRunnerSkipTrackingIntegrationTest`, running the
+   real runner twice against an unchanged file and asserting the second run reports
+   the skip in the observable summary — distinct from
+   `DisputeDocumentReingestionIntegrationTest`, which already proved the underlying
+   *data-level* behavior (same chunk IDs) but never touched the runner, so never
+   proved the *observable* signal actually reflected it.
+6. **`ON DELETE RESTRICT` (Postgres's default) kept over `ON DELETE CASCADE`, reversed
+   during implementation review, not deliberate in the original design.** The same
+   explicit-over-implicit principle `ADR-0004` already established for this project
+   (plain JDBC over JPA, specifically to keep database operations visible) — a
+   `CASCADE` delete would let one `DELETE` on a `source_documents` row silently
+   discard every dependent chunk as an invisible side effect; `RESTRICT` forces a
+   future document-deletion feature to delete dependent chunks as an explicit, visible
+   step, at the cost of an extra line of code few developers would resent given what's
+   actually at stake — real, previously-measured embedding cost (27ms–1.8s per chunk,
+   Milestone 7.2) that a careless single-line delete would otherwise throw away
+   unnoticed.
+
+**Also found and fixed during implementation review, not an architectural decision on
+its own:** `BoundedSentenceChunker` (Milestone 8.2) and `SourceDocumentScanner` (this
+milestone) were both field-initialized (`new X()` hardcoded on the field) rather than
+constructor-injected — the same pattern recurring a second time across two milestones,
+crossing from "one-off" into "worth fixing for consistency and testability," the same
+threshold this project has applied elsewhere (ADR-0006). Both are now real
+`@Component` beans, constructor-injected into their consumers.
+`DisputeDocumentIngestionServiceTest` deliberately still passes a real
+`BoundedSentenceChunker` rather than a mock, since its determinism depends on real
+chunking behavior — making a dependency injectable doesn't obligate every caller to
+fake it.
 
 **A real bug found and fixed during design, before any code was written:** the first
 draft had the ingestion runner update `source_documents.content_hash` to the new hash
@@ -1518,6 +1564,26 @@ update, made as a separate prior write, would already be committed. A failed
 re-ingestion would be permanently mis-marked as successful and silently skipped on
 every future run. Fixed by moving the hash upsert *inside* the one transactional
 method, so any failure anywhere in the sequence rolls back everything, hash included.
+
+**Interview (2026-09-28):** five questions, progressively harder, each required an
+answer before reveal. The strongest interview in this project to date — every question
+answered correctly, most on the first pass with no correction needed at all. Q2 (why
+the hash upsert must live inside the transactional method) produced the single
+sharpest unprompted insight given in any interview this project has run: identifying
+that the bug isn't a one-run inconsistency but a **self-perpetuating** staleness trap
+— once the hash is wrongly updated, every future run recomputes the same hash from the
+same unchanged file, matches the already-corrupted stored value, and skips forever,
+with no way for the system to self-heal without a human noticing. Q4 (why keep
+`RESTRICT` over `CASCADE`) grounded its argument in real, previously-measured
+embedding cost data from Milestone 7.2 rather than an abstract principle — exactly the
+kind of cross-referencing a Staff-level answer makes. Q5 (the observability-vs-
+alerting distinction under a total scheduled-run failure) reached the correct,
+sophisticated conclusion — this milestone built passive, well-correlated data, not an
+active signal that reaches anyone — but needed one precision correction: a claim that
+a total-failure night and a healthy night look identical wasn't quite right, since
+`skippedCount` vs. `failedCount` genuinely distinguish them in the data this same
+milestone built; the real gap is that nothing automatically reads that distinction,
+not that the distinction doesn't exist. No recurring growth area to name this time.
 
 **Explicitly out of scope for 8.3, named so it doesn't quietly creep back in:** no
 concurrency guard between overlapping runs beyond Spring's default single-threaded

@@ -17,14 +17,22 @@ public class DisputeDocumentRepository {
 
     public Long save(DisputeDocument document) {
         String sql = """
-                INSERT INTO dispute_documents (text, embedding)
-                VALUES (:text, CAST(:embedding AS vector))
+                INSERT INTO dispute_documents (text, embedding, source_document_id)
+                VALUES (:text, CAST(:embedding AS vector), :sourceDocumentId)
                 RETURNING id
                 """;
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("text", document.text())
-                .addValue("embedding", VectorLiterals.toVectorLiteral(document.embedding()));
+                .addValue("embedding", VectorLiterals.toVectorLiteral(document.embedding()))
+                .addValue("sourceDocumentId", document.sourceDocumentId());
 
         return jdbcTemplate.queryForObject(sql, params, Long.class);
+    }
+
+    public int deleteBySourceDocumentId(Long sourceDocumentId) {
+        String sql = "DELETE FROM dispute_documents WHERE source_document_id = :sourceDocumentId";
+        MapSqlParameterSource params = new MapSqlParameterSource("sourceDocumentId", sourceDocumentId);
+
+        return jdbcTemplate.update(sql, params);
     }
 }

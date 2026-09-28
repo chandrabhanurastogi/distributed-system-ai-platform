@@ -1,7 +1,9 @@
 package com.distributedplatform.disputeservice.service;
 
 import com.distributedplatform.disputeservice.DisputeDocument;
+import com.distributedplatform.disputeservice.chunking.BoundedSentenceChunker;
 import com.distributedplatform.disputeservice.dao.DisputeDocumentRepository;
+import com.distributedplatform.disputeservice.dao.SourceDocumentRepository;
 import com.distributedplatform.disputeservice.embedding.OllamaEmbeddingService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,6 +30,9 @@ class DisputeDocumentIngestionServiceTest {
     @Mock
     private DisputeDocumentRepository repository;
 
+    @Mock
+    private SourceDocumentRepository sourceDocumentRepository;
+
     @Test
     void ingest_chunksEmbedsAndSavesEachChunkInOrder_returningGeneratedIds() {
         // sentenceA is exactly 1000 chars - the ingestion service's max chunk size -
@@ -50,7 +55,7 @@ class DisputeDocumentIngestionServiceTest {
         when(repository.save(any(DisputeDocument.class))).thenReturn(101L, 102L);
 
         DisputeDocumentIngestionService ingestionService =
-                new DisputeDocumentIngestionService(embeddingService, repository);
+                new DisputeDocumentIngestionService(new BoundedSentenceChunker(), embeddingService, repository, sourceDocumentRepository);
 
         List<Long> generatedIds = ingestionService.ingest(document);
 
