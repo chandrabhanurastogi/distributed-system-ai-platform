@@ -1,6 +1,6 @@
 package com.distributedplatform.llmfundamentals.service;
 
-import com.distributedplatform.llmfundamentals.dto.LlmClient;
+import com.distributedplatform.common.llm.LlmClient;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;

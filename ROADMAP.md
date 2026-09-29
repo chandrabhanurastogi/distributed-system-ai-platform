@@ -1596,6 +1596,141 @@ structure).
 
 ---
 
+### Milestone 8.4 — A real downstream-task evaluation harness
+
+**Status: Complete — 2026-09-29**
+
+**Why this milestone, not chunking/retrieval strategy comparison directly:** Phase 8's
+own goal is comparing chunking/retrieval strategies *against a concrete downstream
+task*, not retrieval-in-the-abstract. No downstream task exists yet — no ground-truth
+dataset, no classification mechanism. Comparing strategies with nothing real to measure
+them against would be comparing against nothing. This milestone builds the yardstick
+first and gets one real, honestly-reported baseline number using what's already
+built (existing sentence-boundary chunking, existing dense/`pgvector` retrieval) —
+the same "prove one real thing works before comparing variations" discipline as every
+prior phase (Phase 7 proved one embedding path before ever discussing ANN; Milestone
+8.1 proved infra before 8.2 added content).
+
+**Concept, made concrete (a real teaching detour during this milestone's own
+scoping):** a *downstream task* is the actual real-world job a component serves, as
+opposed to evaluating it *upstream*/in the abstract. What Milestones 7.2/8.2 already
+measured — "does retrieval return the paragraph semantically closest to the query" —
+is upstream. The downstream task here is the real job `dispute-service` exists for:
+given a customer's claim text, does the system classify it under the correct
+chargeback reason code (10.4, 13.1, 13.3, ...)? A chunking strategy can look better by
+an upstream metric and still be the wrong choice if it doesn't improve the real,
+checkable classification outcome — which is exactly the trap Phase 8's own goal
+statement names by insisting on a concrete downstream task rather than "did it find
+the right paragraph."
+
+**Real architectural decision, requiring a real correction along the way (ADR-0011):**
+classification needs an LLM call — the first one `dispute-service` has ever needed.
+The initial framing offered for reusing `llm-fundamentals`'s `LlmClient` — "this is a
+real, demonstrated need, unlike the embedding-client duplication" — was named and
+rejected as inaccurate: counted the same way `ADR-0006` counts duplicate instances,
+both cases sit at exactly two consumers (`llm-fundamentals` plus one new one). Instance
+count alone gives no principled reason to treat them differently. The corrected,
+actually-load-bearing distinction is **complexity and risk of what's being
+duplicated**, not need: `OllamaEmbeddingService` was ~30 lines, one HTTP call, no known
+bugs; `LlmClient` is a settled interface with two implementations, tool-calling
+mechanics, and a named, already-tracked, unresolved bug
+(`GeminiLlmClient.serializeMessages()`'s prompt-injection-shaped flattening issue).
+Duplicating a minimal LLM client now risked forking that exact bug into a second,
+independently-drifting copy. Decided: only the `LlmClient` interface and its DTOs
+(`ChatMessage`, `LlmResponse`) move into `common` — not a direct dependency on
+`llm-fundamentals` (a full runnable application, not a library target) and not a new
+dedicated module (which would fail this project's own instance-count bar just as badly
+as the rejected duplication framing did — two consumers isn't enough to justify new
+structure, but extending `common`, which already exists and is already depended on by
+`llm-fundamentals`, adds no new dependency edge anywhere). Concrete implementations
+stay local to each consumer — `dispute-service` writes its own minimal one, needing
+neither tool-calling, structured output, nor the buggy multi-turn flattening logic,
+so it never inherits the tracked bug in the first place. Full reasoning, including the
+honest tension this creates with `ADR-0006`'s original "inert infrastructure only"
+framing for `common` (a real capability is a different flavor of shared thing than
+correlation IDs and logging config, even though it's still genuinely domain-free), is
+in `ADR-0011`.
+
+**Task breakdown:**
+- [x] Moved `LlmClient`, `ChatMessage`, `LlmResponse` from `llm-fundamentals`'s `dto`
+      package into a new `com.distributedplatform.common.llm` package in `common`
+- [x] `llm-fundamentals`'s `OllamaLlmClient`/`GeminiLlmClient` updated to implement the
+      interface from `common` — a clean, minimal refactor (import-path changes only,
+      nothing else touched), full existing test suite still green
+- [x] `dispute-service.llm.OllamaLlmClient` — a new, minimal, single-turn-only
+      implementation, deliberately not general-purpose: no tool-calling, no structured
+      output, no multi-turn history handling, and — since it calls Ollama's real
+      `/api/chat` endpoint directly with a native messages array — no message-flattening
+      step at all, meaning zero exposure to the tracked `serializeMessages()` bug that
+      lives entirely in `GeminiLlmClient`. Uses `temperature: 0.0` deliberately, since
+      classification wants a consistent decision, not creative variety.
+- [x] Found and fixed during review: the first draft had `OllamaChatRequest`/
+      `OllamaChatResponse` serializing `common.llm.ChatMessage` directly as their
+      Jackson wire type, coincidentally safe only because Ollama's real shape matches
+      `ChatMessage`'s fields today. Fixed by introducing a local `OllamaMessage` wire
+      type, mirroring `llm-fundamentals`'s existing pattern — a structural guarantee,
+      not a smaller diff: no future change to the shared `ChatMessage` DTO, made for
+      any other provider's sake, can now reach Ollama's wire format even accidentally.
+      Recorded as an addendum to `ADR-0011`.
+- [x] Golden dataset — 8 hand-curated claims (`dispute-classification-golden-set.json`),
+      not just 6: two examples per clean reason code (10.4/13.1/13.3) with deliberately
+      varied surface phrasing to check the classifier isn't just pattern-matching one
+      wording, plus two genuinely ambiguous cases, each carrying an explicit
+      `acceptableReasonCodes` list (not a single forced answer) and a note explaining
+      exactly what a good classifier should do and why the case is hard
+- [x] `ClaimClassificationService.classify(String)` — embed claim → `findNearest`
+      (new `DisputeDocumentRepository` method, top-K cosine-distance retrieval) →
+      build a prompt (system message grounding the classifier in retrieved policy text
+      only, user message with the claim) → call `LlmClient` → parse a
+      `REASON_CODE:`/`EXPLANATION:` formatted response, with a documented fallback for
+      when `llama3.2` ignores the requested format (a real, observed failure mode, not
+      a hypothetical one)
+- [x] `DisputeClassificationEvalTest` — the real evaluation harness. Clean and
+      ambiguous claims are scored and reported **separately, deliberately**: blending
+      all 8 into one accuracy percentage would manufacture false precision over cases
+      with no single ground truth to score against. Only clean claims produce the
+      headline accuracy number; ambiguous claims are logged in full (expected set,
+      actual answer, explanation, and the note) for a human to read and judge. The
+      test's only assertion is structural (every claim was accounted for) —
+      deliberately not a pass/fail correctness gate, since there's no prior baseline
+      yet to hold this run to and inventing a threshold now would be exactly the
+      fabricated-number problem Rule 9 exists to prevent.
+
+**Real, non-fabricated baseline result (2026-09-29):** 6/6 (100%) on the six clean,
+unambiguous claims — a small sample, reported honestly as such, no inflated precision.
+The two ambiguous cases produced genuinely informative results specifically *because*
+they were scored and logged separately rather than blended in:
+- **Claim-08 (a claim textbook-shaped like fraud, but disclosing a prior purchase from
+  the same merchant — the policy's own named disqualifying pattern) is real evidence
+  that retrieval is doing actual work, not decoration.** The classifier's own
+  explanation read: "the cardholder claims they did not authorize the transaction,
+  **but acknowledges a prior purchase from the same merchant, which weakens their
+  claim and may result in the dispute being declined**" — reasoning drawn directly
+  from the retrieved policy text's disqualifying-pattern language, not a surface
+  pattern-match of "unauthorized charge" straight to 10.4.
+- **Claim-07 (a wrong-item-delivered case, genuinely ambiguous between 13.1 and 13.3)
+  is a real, honest shortfall the harness correctly surfaced.** The classifier picked
+  13.3 (a technically acceptable answer) but never surfaced the 13.1-vs-13.3 tension
+  the golden dataset's own note says a good classifier should name. Blended into one
+  accuracy percentage, this would have been invisible — it's only visible because the
+  ambiguous case's full explanation gets logged rather than reduced to a hit/miss.
+
+**One small, currently-inert finding, worth tracking rather than fixing now:** the
+match logic (`result.reasonCode().contains(code)`) is a substring check, not exact
+equality. Safe with the current three codes (none is a substring of another), but
+fragile if a future reason code happened to be a superstring of an existing one.
+
+**Explicitly out of scope for 8.4:** no chunking-strategy comparison yet (this
+milestone establishes the one baseline everything else gets compared against later);
+no retrieval-strategy comparison beyond the existing dense/`pgvector` approach; no
+attempt yet to distinguish "retrieval found the wrong document" from "the LLM had the
+right context and still answered wrong" as two separate failure classes — both are
+real, distinguishable failure modes named during this milestone's scoping, but
+splitting the metric that way is deferred until the simpler end-to-end accuracy number
+is real and trusted.
+
+---
+
 ## Phase 9 — GraphRAG
 
 **Goal:** Neo4j-backed knowledge graph (entity extraction → relationship extraction →

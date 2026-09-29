@@ -1,8 +1,8 @@
 package com.distributedplatform.llmfundamentals.service;
 
-import com.distributedplatform.llmfundamentals.dto.ChatMessage;
-import com.distributedplatform.llmfundamentals.dto.LlmClient;
-import com.distributedplatform.llmfundamentals.dto.LlmResponse;
+import com.distributedplatform.common.llm.ChatMessage;
+import com.distributedplatform.common.llm.LlmClient;
+import com.distributedplatform.common.llm.LlmResponse;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;

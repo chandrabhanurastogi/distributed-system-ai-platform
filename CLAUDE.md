@@ -156,3 +156,16 @@ assistant:
   in-memory corpus (Milestone 7.2) — this belongs as a real design question (schema/
   dimension enforcement, migration safety) once Phase 8 introduces a real vector store
   with actual multi-row guarantees to lean on, not solved speculatively here.
+- **Known, currently-inert assumption, surfaced while building the classification eval
+  harness, not yet fixed:** `DisputeClassificationEvalTest`'s match logic
+  (`result.reasonCode().contains(code)`) is a substring check, not exact equality. This
+  is safe today only because none of the three real reason codes (`10.4`, `13.1`,
+  `13.3`) is a substring of another. It is not safe in general: a future reason code
+  that happened to be a superstring of an existing one (e.g. a hypothetical `13.10`
+  alongside `13.1`) would silently false-match here — verified directly
+  (`"13.10".contains("13.1")` is `true`), not assumed. The risk is one-directional (the
+  *actual* result being the longer string against an unrelated shorter acceptable code;
+  the reverse direction doesn't misfire). Not fixed now because the human explicitly
+  chose to record it rather than change the matching logic. Revisit if `dispute_documents`
+  or the golden dataset ever gains a reason code that could collide this way with an
+  existing one.

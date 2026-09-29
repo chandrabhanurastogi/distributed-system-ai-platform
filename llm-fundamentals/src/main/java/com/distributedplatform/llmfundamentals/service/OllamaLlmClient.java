@@ -1,8 +1,8 @@
 package com.distributedplatform.llmfundamentals.service;
 
-import com.distributedplatform.llmfundamentals.dto.ChatMessage;
-import com.distributedplatform.llmfundamentals.dto.LlmClient;
-import com.distributedplatform.llmfundamentals.dto.LlmResponse;
+import com.distributedplatform.common.llm.ChatMessage;
+import com.distributedplatform.common.llm.LlmClient;
+import com.distributedplatform.common.llm.LlmResponse;
 import com.distributedplatform.llmfundamentals.dto.ollama.Message;
 import com.distributedplatform.llmfundamentals.dto.ollama.OllamaResponse;
 import org.springframework.beans.factory.annotation.Autowired;

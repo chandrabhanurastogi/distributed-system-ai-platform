@@ -68,6 +68,30 @@ pointing the service at a genuinely unreachable address and confirming a proper 
 `503`, not an unhandled `500`. This closes the failure-scenario gap flagged as open at
 the end of Milestone 6.1's Definition of Done walkthrough.
 
+**`LlmClient` moved to `common` (ADR-0011, Milestone 8.4):** `dispute-service` needed a
+real LLM call for the first time (claim classification), and depending on
+`llm-fundamentals` directly was rejected (it's a full runnable application, not a
+library target). `com.distributedplatform.common.llm` is now a real package in
+`common`, holding `LlmClient`, `ChatMessage`, and `LlmResponse`; `llm-fundamentals`'s
+`OllamaLlmClient` and `GeminiLlmClient` were refactored (import-path changes only,
+existing behavior and tests unchanged) to implement the interface from `common`
+instead of their own local copy. This is a genuine stretch of `common`'s original
+charter, worth naming honestly: `common` had so far held only inert, non-functional
+plumbing (correlation IDs, logging config); `LlmClient` is a real functional
+capability multiple services do work with, a different flavor of shared thing. It
+still satisfies the literal bar (genuinely domain-free), and reusing `common` —
+already-justified, already depended on by `llm-fundamentals` — was judged better than
+a new dedicated module, which would fail this project's own instance-count bar just as
+badly. Only the interface and DTOs moved; concrete implementations
+(`OllamaLlmClient`, `GeminiLlmClient`) stayed local to `llm-fundamentals`, and
+`dispute-service` wrote its own minimal, single-turn-only `OllamaLlmClient`
+implementation rather than share one, specifically so it never inherits the
+currently-tracked `GeminiLlmClient.serializeMessages()` bug. That implementation maps
+`ChatMessage` to its own local `OllamaMessage` wire-format type before serialization —
+found and fixed during this same milestone (`ADR-0011` addendum) — so that no future
+change to the shared `ChatMessage` DTO, made for any other provider's sake, can ever
+reach Ollama's wire format, even accidentally.
+
 ### Data
 
 Database-per-service is wired *and* now actually holds data. Each service has its own

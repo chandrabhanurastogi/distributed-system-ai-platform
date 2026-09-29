@@ -1,4 +1,4 @@
-package com.distributedplatform.llmfundamentals.dto;
+package com.distributedplatform.common.llm;
 
 import java.util.List;
 

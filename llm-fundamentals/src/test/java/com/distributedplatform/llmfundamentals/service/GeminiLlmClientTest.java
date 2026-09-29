@@ -1,7 +1,7 @@
 package com.distributedplatform.llmfundamentals.service;
 
-import com.distributedplatform.llmfundamentals.dto.ChatMessage;
-import com.distributedplatform.llmfundamentals.dto.LlmResponse;
+import com.distributedplatform.common.llm.ChatMessage;
+import com.distributedplatform.common.llm.LlmResponse;
 import com.distributedplatform.llmfundamentals.dto.gemini.GeminiResponse;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;

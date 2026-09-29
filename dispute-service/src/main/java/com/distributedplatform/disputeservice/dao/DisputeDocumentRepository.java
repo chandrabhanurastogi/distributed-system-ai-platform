@@ -6,6 +6,8 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
+
 @Repository
 public class DisputeDocumentRepository {
 
@@ -34,5 +36,19 @@ public class DisputeDocumentRepository {
         MapSqlParameterSource params = new MapSqlParameterSource("sourceDocumentId", sourceDocumentId);
 
         return jdbcTemplate.update(sql, params);
+    }
+
+    public List<String> findNearest(double[] queryVector, int k) {
+        String sql = """
+                SELECT text, embedding <=> CAST(:query AS vector) AS distance
+                FROM dispute_documents
+                ORDER BY distance ASC
+                LIMIT :k
+                """;
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("query", VectorLiterals.toVectorLiteral(queryVector))
+                .addValue("k", k);
+
+        return jdbcTemplate.query(sql, params, (rs, rowNum) -> rs.getString("text"));
     }
 }

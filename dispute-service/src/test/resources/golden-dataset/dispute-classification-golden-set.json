@@ -1,0 +1,58 @@
+[
+  {
+    "id": "claim-01",
+    "claimText": "I found a $340 charge on my card from an online electronics store I've never heard of and never shopped at. My physical card has been in my wallet the whole time. I have never bought anything from this merchant before, ever.",
+    "acceptableReasonCodes": ["10.4"],
+    "ambiguous": false,
+    "note": "Clean fraud claim: card-absent, unauthorized, no prior merchant relationship - matches 10.4's definition with none of the disqualifying factors the policy names."
+  },
+  {
+    "id": "claim-02",
+    "claimText": "Someone used my card number to buy a $600 digital gift card from a website I've never visited in my life. I don't recognize the merchant name at all and have zero purchase history with them.",
+    "acceptableReasonCodes": ["10.4"],
+    "ambiguous": false,
+    "note": "Second clean 10.4 case, deliberately different phrasing (gift card, not electronics) to check the classifier isn't just pattern-matching one surface wording."
+  },
+  {
+    "id": "claim-03",
+    "claimText": "I paid for a couch three weeks ago. It was supposed to arrive last Friday. It's now five days late, tracking hasn't updated in over a week, and the seller isn't responding. I want my money back.",
+    "acceptableReasonCodes": ["13.1"],
+    "ambiguous": false,
+    "note": "Clean 13.1: nothing was ever delivered, past the expected delivery date."
+  },
+  {
+    "id": "claim-04",
+    "claimText": "I ordered a birthday gift two weeks ago for a delivery that was guaranteed by yesterday. The order still shows 'processing' and has never shipped. The event has already passed.",
+    "acceptableReasonCodes": ["13.1"],
+    "ambiguous": false,
+    "note": "Second clean 13.1 case with different phrasing (never shipped at all, vs. claim-03's stalled-in-transit framing)."
+  },
+  {
+    "id": "claim-05",
+    "claimText": "The blender I ordered was advertised as 1000 watts with ten speed settings. What actually arrived is a much smaller, generic-looking blender with only three speeds, and the lid is cracked.",
+    "acceptableReasonCodes": ["13.3"],
+    "ambiguous": false,
+    "note": "Clean 13.3: something was received, but it materially differs from its description."
+  },
+  {
+    "id": "claim-06",
+    "claimText": "My new phone case arrived visibly cracked down one side and the clasp is snapped off. It's unusable straight out of the box.",
+    "acceptableReasonCodes": ["13.3"],
+    "ambiguous": false,
+    "note": "Second clean 13.3 case - defective on arrival, rather than claim-05's wrong-product framing, to cover both halves of 13.3's definition."
+  },
+  {
+    "id": "claim-07",
+    "claimText": "I ordered a specific laptop model. What showed up is a completely different, cheaper laptop with lower specs than what I paid for and what the listing described.",
+    "acceptableReasonCodes": ["13.1", "13.3"],
+    "ambiguous": true,
+    "note": "Genuinely ambiguous: the laptop that was ordered was never received (arguing for 13.1), but a physical item was delivered that materially differs from the description (arguing for 13.3). The policy text doesn't resolve wrong-item-delivered as clearly belonging to one code over the other. A good classifier should surface this tension rather than confidently pick one without justification."
+  },
+  {
+    "id": "claim-08",
+    "claimText": "I don't recognize a $210 charge on my statement and never authorized it - though now that I look closer, I did buy something from this exact same online store about a month ago.",
+    "acceptableReasonCodes": ["10.4"],
+    "ambiguous": true,
+    "note": "The customer's own framing is textbook 10.4 (unauthorized charge), but the disclosed prior purchase from the same merchant is precisely the disqualifying pattern the policy names: 'a pattern of prior legitimate purchases materially weakens a fraud claim and may result in the dispute being declined before it is ever filed.' A classifier that just pattern-matches 'I didn't authorize this' to 10.4 without registering that caveat is missing the actual point of retrieving the policy text at all - this case tests whether retrieval is doing real work or just decoration."
+  }
+]
