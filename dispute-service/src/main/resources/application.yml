@@ -8,6 +8,21 @@ ollama:
 dispute:
   ingestion:
     cron: "0 0 2 * * *"
+  chunking:
+    bounded-sentence:
+      max-chunk-size: 1000
+    fixed-size:
+      chunk-size: 1000
+    paragraph:
+      max-chunk-size: 1000
+    recursive:
+      max-chunk-size: 1000
+    overlap:
+      chunk-size: 1000
+      overlap-size: 100
+    semantic:
+      max-chunk-size: 1000
+      breakpoint-percentile: 0.95
 
 logging:
   structured:

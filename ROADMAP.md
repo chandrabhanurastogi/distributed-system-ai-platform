@@ -1182,6 +1182,10 @@ direct result of this answer, not asserted and then discarded.
 
 ## Phase 8 — RAG
 
+**Closed early, 2026-10-06, by deliberate decision — see Milestone 8.5's closing note.**
+Retrieval-strategy comparison and the Spring AI closing milestone, both named in the
+goal below, were not done. Everything else in this section was.
+
 **Track B — unlocked, no dependency on Track A.** Real prerequisite is Phase 6/7 (LLM
 and embedding fundamentals) — this phase needs a document corpus and `pgvector`, not
 real transactional data, so it does not need to wait on the distributed backbone.
@@ -1728,6 +1732,120 @@ right context and still answered wrong" as two separate failure classes — both
 real, distinguishable failure modes named during this milestone's scoping, but
 splitting the metric that way is deferred until the simpler end-to-end accuracy number
 is real and trusted.
+
+---
+
+### Milestone 8.5 — Chunking-strategy comparison
+
+**Status: Complete — 2026-10-06**
+
+**Concept:** the chunk is the unit of retrieval. A perfect retriever can only ever find
+what got chunked as a coherent, findable unit in the first place — a bad chunking
+strategy doesn't throw an exception, it just makes the right passage unfindable or
+findable-but-missing-its-context, silently. This milestone uses Milestone 8.4's own
+yardstick (the golden dataset + `classify()` pipeline) for the first time to measure
+that effect for real, instead of just asserting it in the abstract.
+
+**Architecture decision:** six chunking strategies were needed simultaneously
+(fixed-size, sentence-boundary, paragraph, recursive, overlap, semantic), all called
+from one shared comparison harness — unlike `BoundedSentenceChunker`'s and
+`BruteForceRetriever`'s earlier no-interface decisions (Milestone 7.2/8.1), this
+satisfies the actual bar Milestone 8.1's Q4 established: a real, simultaneous
+multi-implementation need with a real shared caller, not a speculative one. A new
+`ChunkingStrategy` interface (`chunk(String text)`, deliberately no call-time
+parameters — each implementation self-configures via constructor injection and its own
+`application.yml` namespace) was added; `BoundedSentenceChunker` was retrofitted to
+implement it, and the other five were built against it from the start. Spring
+autowires all six as named beans into a `Map<String, ChunkingStrategy>` for the
+harness; production ingestion (`DisputeDocumentIngestionService`) keeps a hardcoded
+`@Qualifier("boundedSentenceChunker")` so this experiment doesn't silently change real
+ingestion behavior.
+
+**Task breakdown:**
+- [x] `ChunkingStrategy` interface + `BoundedSentenceChunker` retrofit
+- [x] `FixedSizeChunker` — the naive baseline, zero boundary awareness, cuts can and do
+      land mid-word
+- [x] `ParagraphChunker` — one paragraph is always one chunk, never packed with a
+      neighbor even when both would fit, with a hard-split fallback for an oversized
+      paragraph
+- [x] `RecursiveChunker` — cascades paragraph → sentence → word → raw character,
+      recursing into a finer boundary only for a unit still too big, instead of
+      jumping straight to a character cut like the single-level fallbacks do
+- [x] `OverlapChunker` — a sliding window over raw characters (deliberately
+      boundary-blind, to isolate overlap as the one variable under test rather than
+      conflating it with structure-awareness)
+- [x] `SemanticChunker` — boundaries from meaning, not structure: embeds consecutive
+      sentences, computes cosine distance between each pair, places a breakpoint
+      wherever that distance exceeds the document's own Nth-percentile distance
+      (self-calibrating per document, not a universal threshold)
+- [x] **Found and fixed during review:** `SemanticChunker`'s local `cosineSimilarity`
+      silently diverged from `ADR-0008`'s already-decided answer for the identical
+      undefined operation (zero-magnitude vectors) — it would have produced a silent
+      `NaN` instead of a named exception. Fixed with a local `ZeroVectorException`,
+      mirroring `ADR-0008`'s reasoning exactly but kept local rather than depending on
+      `llm-fundamentals`, for the same reason the formula itself is duplicated locally
+      (`ADR-0011`'s test: small, simple, no known bugs, cheap to duplicate). Covered by
+      a new test proving the exception fires rather than letting `NaN` propagate.
+- [x] **Found and fixed during review, not just noted:** `ParagraphChunkerTest` and
+      `SemanticChunkerTest` independently proved, from two unrelated angles, that the
+      original single 3-paragraph/10-sentence test document was too small to let
+      paragraph-based or semantic chunking demonstrate their real behavior at a
+      realistic bound — every real paragraph exceeded a 300-char bound, and the
+      default `breakpointPercentile=0.95` had too few samples to land below the
+      distribution's own maximum. Fixed by authoring a second real document
+      (`network-interchange-scheme-rules.txt`) in the category Phase 8's own goal
+      already named but hadn't yet written (network/interchange scheme-rule content),
+      sized and measured directly — not guessed — to have every paragraph under 300
+      chars and enough sentences (27) that the default percentile has real headroom
+      below the sample maximum.
+- [x] `ChunkingStrategyComparisonEvalTest` — the actual payoff. Autowires all six beans
+      via `Map<String, ChunkingStrategy>`, ingests both real documents once per
+      strategy (clearing `dispute_documents` between runs via a direct
+      `NamedParameterJdbcTemplate` delete — same "raw JDBC in the test, no premature
+      repository method" discipline as Milestone 8.1's Q4), then runs the full golden
+      dataset through the real `classify()` pipeline for each — same retrieval, same
+      LLM, same `temperature 0`, only chunking varies. Clean and ambiguous claims
+      scored separately, same Rule 9 discipline as `DisputeClassificationEvalTest`.
+
+**Real, non-fabricated result (2026-10-06):** `paragraph` and `recursive` both scored
+6/6 (100%) on the clean claims; `boundedSentenceChunker`, `fixedSize`, `overlap`, and
+`semantic` all scored 5/6 (83%), each missing the same claim (`claim-01`). The reason
+is explainable, not mysterious, and was traced precisely, not left as a bare number —
+and the first trace (recorded here originally, now corrected) guessed at the exact
+mechanism instead of computing it; a direct replay of `boundedSentenceChunker`'s real
+packing against the actual document corrected it. At today's shared
+`maxChunkSize=1000` (still "not yet measured, a placeholder" everywhere in this
+codebase), every real paragraph in both documents is under 1000 characters, so
+`paragraph`/`recursive` keep each paragraph as its own chunk (14 chunks total,
+exactly matching the real paragraph count across both documents). The other four
+strategies pack sentences up to the 1000-character limit with no paragraph awareness
+(6 chunks total) — and the real, computed first chunk from `cardholder-dispute-policy.txt`
+is 975 characters: the document's generic title merged with the *entire* 10.4 fraud
+paragraph, leaving no room for anything past it. `paragraph`/`recursive` instead keep
+the title (75 chars) and the fraud paragraph (847 chars) as two separate chunks.
+`claim-01` is a clean fraud case; the fraud-specific paragraph diluted with generic
+document-title text produces a slightly less distinctive embedding than the same
+paragraph kept on its own — a real, measured instance of chunk purity affecting
+retrieval precision, demonstrated on this project's own real documents and real
+claims, not asserted from an unverified guess about which content was doing the
+diluting.
+
+**Phase 8 closed early here, by deliberate decision, not oversight — see note below.**
+
+---
+
+**Phase 8 closing note (2026-10-06):** Phase 8's original goal also named a
+retrieval-strategy comparison (dense/BM25/hybrid/reranking/HyDE) and a Spring AI
+closing milestone. Neither is being done. This is an explicit scope decision, not a
+silently dropped task: after two straight weeks on this phase, continuing through two
+more rounds of structurally similar work (more comparison plumbing, fewer new
+concepts per hour than chunking gave) was judged not worth it against the fatigue it
+was producing. Phase 8 already delivered what it was actually for — understanding why
+chunking and retrieval design matters, and real, hands-on proof of designing,
+implementing, and empirically evaluating RAG components from scratch, including two
+non-trivial bugs this milestone's own tests caught before they shipped. Revisit
+retrieval-strategy comparison and Spring AI specifically if a later phase creates a
+concrete need for either — not as unfinished homework to return to on principle.
 
 ---
 

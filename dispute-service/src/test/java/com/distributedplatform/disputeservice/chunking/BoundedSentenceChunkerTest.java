@@ -15,8 +15,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BoundedSentenceChunkerTest {
 
-    private final BoundedSentenceChunker chunker = new BoundedSentenceChunker();
-
     @Test
     void chunk_withMultipleSentences_groupsThemUntilTheSizeLimitThenStartsANewChunk() {
         // "One fish." "Two fish." "Red fish." are 9 chars each; joined with single
@@ -24,7 +22,7 @@ class BoundedSentenceChunkerTest {
         // Adding "Blue fish." (10 chars) would push it to 40, so it starts a new chunk.
         String text = "One fish. Two fish. Red fish. Blue fish.";
 
-        List<String> chunks = chunker.chunk(text, 30);
+        List<String> chunks = new BoundedSentenceChunker(30).chunk(text);
 
         assertThat(chunks).containsExactly(
                 "One fish. Two fish. Red fish.",
@@ -35,7 +33,7 @@ class BoundedSentenceChunkerTest {
     void chunk_withInputShorterThanOneChunk_returnsItAsASingleChunk() {
         String text = "Distributed systems require reliable coordination.";
 
-        List<String> chunks = chunker.chunk(text, 500);
+        List<String> chunks = new BoundedSentenceChunker(500).chunk(text);
 
         assertThat(chunks).containsExactly("Distributed systems require reliable coordination.");
     }
@@ -46,7 +44,7 @@ class BoundedSentenceChunkerTest {
         // maxChunkSize - proves the boundary is inclusive (<=), not off-by-one.
         String text = "Hi. Bye.";
 
-        List<String> chunks = chunker.chunk(text, 8);
+        List<String> chunks = new BoundedSentenceChunker(8).chunk(text);
 
         assertThat(chunks).containsExactly("Hi. Bye.");
     }
@@ -61,7 +59,7 @@ class BoundedSentenceChunkerTest {
         // not merged with the hard-split fragments.
         String text = "Hi. 1234567890123456.";
 
-        List<String> chunks = chunker.chunk(text, 10);
+        List<String> chunks = new BoundedSentenceChunker(10).chunk(text);
 
         assertThat(chunks).containsExactly("Hi.", "1234567890", "123456.");
     }
@@ -73,22 +71,22 @@ class BoundedSentenceChunkerTest {
         // sitting exactly on the limit takes the normal path, not the hard-split one.
         String text = "Testing.";
 
-        List<String> chunks = chunker.chunk(text, 8);
+        List<String> chunks = new BoundedSentenceChunker(8).chunk(text);
 
         assertThat(chunks).containsExactly("Testing.");
     }
 
     @Test
     void chunk_whenTextIsNull_throwsNullPointerException() {
-        assertThatThrownBy(() -> chunker.chunk(null, 10))
+        assertThatThrownBy(() -> new BoundedSentenceChunker(10).chunk(null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessage("text must not be null");
     }
 
     @ParameterizedTest
     @ValueSource(ints = {0, -1})
-    void chunk_whenMaxChunkSizeIsZeroOrNegative_throwsIllegalArgumentException(int invalidMaxChunkSize) {
-        assertThatThrownBy(() -> chunker.chunk("Some text.", invalidMaxChunkSize))
+    void constructor_whenMaxChunkSizeIsZeroOrNegative_throwsIllegalArgumentException(int invalidMaxChunkSize) {
+        assertThatThrownBy(() -> new BoundedSentenceChunker(invalidMaxChunkSize))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("maxChunkSize must be positive");
     }
@@ -105,7 +103,7 @@ class BoundedSentenceChunkerTest {
         String document = loadResource("/documents/cardholder-dispute-policy.txt");
         int maxChunkSize = 300;
 
-        List<String> chunks = chunker.chunk(document, maxChunkSize);
+        List<String> chunks = new BoundedSentenceChunker(maxChunkSize).chunk(document);
 
         assertThat(chunks).isNotEmpty();
         assertThat(chunks.size()).isGreaterThan(1);

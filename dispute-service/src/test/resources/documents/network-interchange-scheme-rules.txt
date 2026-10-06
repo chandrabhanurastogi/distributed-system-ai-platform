@@ -1,0 +1,19 @@
+Network Interchange and Scheme-Rule Reference
+
+Each card network reserves specific bank identification number ranges for its issuers. The first six to eight digits of a card number identify both network and issuer. A processor uses this range to route authorization automatically.
+
+Interchange rates follow qualification tiers reflecting transaction risk. Card-present, chip-verified transactions qualify for the lowest tier. A transaction failing documentation is downgraded to a higher tier at settlement.
+
+A cross-border fee applies whenever issuer and acquirer sit in different countries. This holds regardless of the transaction's settlement currency. The fee is a percentage charged on top of interchange.
+
+Dynamic currency conversion lets a merchant quote the cardholder's home currency at checkout. A cardholder may decline and settle in the merchant's local currency instead. Failing to disclose the rate before authorization violates network rules.
+
+Merchant category codes assign a risk tier based on historical chargeback rates. A high-risk code carries additional reserve requirements at the acquirer. A miscoded merchant may have its code corrected retroactively.
+
+An acquirer may fee a merchant that misses its required PCI DSS validation window. This fee recurs monthly until a valid attestation is filed. It is assessed independently of any breach liability the merchant separately incurs.
+
+A merchant filing representment has forty-five days to escalate to pre-arbitration. A further thirty days are allowed to escalate again, to binding arbitration. Missing either window forfeits the right to keep disputing that chargeback.
+
+Representment evidence must directly rebut the specific reason code that was filed. Generic delivery proof alone does not rebut a not-as-described chargeback. Evidence addressing the wrong reason code risks outright rejection.
+
+Both issuer and acquirer pay a pre-arbitration filing fee once a dispute escalates. This fee is non-refundable regardless of who prevails at arbitration. The losing party also bears the network's arbitration case fee.

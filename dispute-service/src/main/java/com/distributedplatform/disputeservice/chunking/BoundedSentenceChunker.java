@@ -1,5 +1,6 @@
 package com.distributedplatform.disputeservice.chunking;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -15,16 +16,23 @@ import java.util.regex.Pattern;
  * (sentence-grouping, then one raw character-count cut), not the general recursive
  * paragraph/sentence/word/character strategy Phase 8 compares later.
  */
-@Component
-public class BoundedSentenceChunker {
+@Component("boundedSentenceChunker")
+public class BoundedSentenceChunker implements ChunkingStrategy {
 
     private static final Pattern SENTENCE_BOUNDARY = Pattern.compile("(?<=[.!?])\\s+");
 
-    public List<String> chunk(String text, int maxChunkSize) {
-        Objects.requireNonNull(text, "text must not be null");
+    private final int maxChunkSize;
+
+    public BoundedSentenceChunker(@Value("${dispute.chunking.bounded-sentence.max-chunk-size}") int maxChunkSize) {
         if (maxChunkSize <= 0) {
             throw new IllegalArgumentException("maxChunkSize must be positive");
         }
+        this.maxChunkSize = maxChunkSize;
+    }
+
+    @Override
+    public List<String> chunk(String text) {
+        Objects.requireNonNull(text, "text must not be null");
 
         List<String> chunks = new ArrayList<>();
         StringBuilder currentChunk = new StringBuilder();
@@ -35,7 +43,7 @@ public class BoundedSentenceChunker {
                     chunks.add(currentChunk.toString());
                     currentChunk = new StringBuilder();
                 }
-                chunks.addAll(hardSplitByCharacterCount(sentence, maxChunkSize));
+                chunks.addAll(hardSplitByCharacterCount(sentence));
                 continue;
             }
 
@@ -72,7 +80,7 @@ public class BoundedSentenceChunker {
         return sentences;
     }
 
-    private List<String> hardSplitByCharacterCount(String sentence, int maxChunkSize) {
+    private List<String> hardSplitByCharacterCount(String sentence) {
         List<String> pieces = new ArrayList<>();
         int start = 0;
         while (start < sentence.length()) {

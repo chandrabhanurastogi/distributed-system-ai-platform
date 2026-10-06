@@ -2,6 +2,7 @@ package com.distributedplatform.disputeservice.service;
 
 import com.distributedplatform.disputeservice.DisputeDocument;
 import com.distributedplatform.disputeservice.chunking.BoundedSentenceChunker;
+import com.distributedplatform.disputeservice.chunking.ChunkingStrategy;
 import com.distributedplatform.disputeservice.dao.DisputeDocumentRepository;
 import com.distributedplatform.disputeservice.dao.SourceDocumentRepository;
 import com.distributedplatform.disputeservice.embedding.OllamaEmbeddingService;
@@ -54,8 +55,9 @@ class DisputeDocumentIngestionServiceTest {
         // ever copies the array before saving. Returning by call order sidesteps that.
         when(repository.save(any(DisputeDocument.class))).thenReturn(101L, 102L);
 
+        ChunkingStrategy chunker = new BoundedSentenceChunker(1000);
         DisputeDocumentIngestionService ingestionService =
-                new DisputeDocumentIngestionService(new BoundedSentenceChunker(), embeddingService, repository, sourceDocumentRepository);
+                new DisputeDocumentIngestionService(chunker, embeddingService, repository, sourceDocumentRepository);
 
         List<Long> generatedIds = ingestionService.ingest(document);
 

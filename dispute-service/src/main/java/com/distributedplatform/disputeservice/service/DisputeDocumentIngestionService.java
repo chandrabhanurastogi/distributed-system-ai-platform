@@ -2,10 +2,11 @@ package com.distributedplatform.disputeservice.service;
 
 import com.distributedplatform.disputeservice.DisputeDocument;
 import com.distributedplatform.disputeservice.SourceDocument;
-import com.distributedplatform.disputeservice.chunking.BoundedSentenceChunker;
+import com.distributedplatform.disputeservice.chunking.ChunkingStrategy;
 import com.distributedplatform.disputeservice.dao.DisputeDocumentRepository;
 import com.distributedplatform.disputeservice.dao.SourceDocumentRepository;
 import com.distributedplatform.disputeservice.embedding.OllamaEmbeddingService;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,14 +19,13 @@ import java.util.Optional;
 public class DisputeDocumentIngestionService {
 
     private static final String EMBEDDING_MODEL = "nomic-embed-text";
-    private static final int MAX_CHUNK_SIZE = 1000;
 
-    private final BoundedSentenceChunker chunker;
+    private final ChunkingStrategy chunker;
     private final OllamaEmbeddingService embeddingService;
     private final DisputeDocumentRepository disputeDocumentRepository;
     private final SourceDocumentRepository sourceDocumentRepository;
 
-    public DisputeDocumentIngestionService(BoundedSentenceChunker chunker,
+    public DisputeDocumentIngestionService(@Qualifier("boundedSentenceChunker") ChunkingStrategy chunker,
                                             OllamaEmbeddingService embeddingService,
                                             DisputeDocumentRepository disputeDocumentRepository,
                                             SourceDocumentRepository sourceDocumentRepository) {
@@ -38,7 +38,7 @@ public class DisputeDocumentIngestionService {
     public List<Long> ingest(String documentText) {
         List<Long> generatedIds = new ArrayList<>();
 
-        for (String chunkText : chunker.chunk(documentText, MAX_CHUNK_SIZE)) {
+        for (String chunkText : chunker.chunk(documentText)) {
             double[] embedding = embeddingService.embed(EMBEDDING_MODEL, chunkText);
             generatedIds.add(disputeDocumentRepository.save(new DisputeDocument(chunkText, embedding)));
         }
@@ -76,7 +76,7 @@ public class DisputeDocumentIngestionService {
 
         disputeDocumentRepository.deleteBySourceDocumentId(sourceDocumentId);
 
-        for (String chunkText : chunker.chunk(documentText, MAX_CHUNK_SIZE)) {
+        for (String chunkText : chunker.chunk(documentText)) {
             double[] embedding = embeddingService.embed(EMBEDDING_MODEL, chunkText);
             disputeDocumentRepository.save(new DisputeDocument(chunkText, embedding, sourceDocumentId));
         }

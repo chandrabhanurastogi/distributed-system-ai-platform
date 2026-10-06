@@ -4,8 +4,9 @@ This document reflects the **current, actual state** of the system, verified aga
 repository — not the aspirational end state. It is updated every time a milestone changes
 a service boundary, API, database, topic, or consistency guarantee (see `CLAUDE.md` Rule 7).
 
-Last verified against repo: 2026-09-28, working tree (Milestones 8.1-8.3 complete).
-Phase 0, Phase 6, and Phase 7 are complete; Phase 8 (Track B, RAG) is in progress.
+Last verified against repo: 2026-10-06, working tree (Milestones 8.1-8.5 complete).
+Phase 0, Phase 6, Phase 7, and Phase 8 (Track B, RAG) are complete — Phase 8 closed
+early by deliberate decision; see `ROADMAP.md`'s Phase 8 closing note.
 
 ---
 
@@ -91,6 +92,23 @@ currently-tracked `GeminiLlmClient.serializeMessages()` bug. That implementation
 found and fixed during this same milestone (`ADR-0011` addendum) — so that no future
 change to the shared `ChatMessage` DTO, made for any other provider's sake, can ever
 reach Ollama's wire format, even accidentally.
+
+**Chunking is now a real strategy abstraction (Milestone 8.5):** a `ChunkingStrategy`
+interface (`chunk(String text)`, no call-time parameters) lives in `dispute-service`,
+with six real, simultaneous implementations — `BoundedSentenceChunker`,
+`FixedSizeChunker`, `ParagraphChunker`, `RecursiveChunker`, `OverlapChunker`,
+`SemanticChunker` — each self-configured via constructor injection against its own
+`application.yml` namespace. This crosses the bar `BoundedSentenceChunker` and
+`BruteForceRetriever` deliberately didn't (Milestones 8.2/7.2): a real, simultaneous
+multi-implementation need with one real shared caller, not a speculative one. Spring
+autowires all six into a `Map<String, ChunkingStrategy>` for
+`ChunkingStrategyComparisonEvalTest`; production ingestion
+(`DisputeDocumentIngestionService`) keeps a hardcoded
+`@Qualifier("boundedSentenceChunker")` so the experiment doesn't silently change real
+ingestion behavior. The test corpus now holds two real documents, not one —
+`network-interchange-scheme-rules.txt` was added after `ParagraphChunkerTest` and
+`SemanticChunkerTest` independently proved the original single document was too small
+to let either strategy demonstrate its real behavior at a realistic bound.
 
 ### Data
 
