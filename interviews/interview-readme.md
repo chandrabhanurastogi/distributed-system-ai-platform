@@ -23,7 +23,7 @@ Pick the phase you care about and read, in this order:
 
 ## If you want to test what you actually remember
 
-Each milestone has its own file — [`0.2.md`](0.2.md) through [`7.2.md`](7.2.md) — with
+Each milestone has its own file — [`0.2.md`](0.2.md) through [`8.5.md`](8.5.md) — with
 the real interview questions, the answer as it was actually first given (including
 wrong or imprecise attempts, which are worth reviewing too), any correction, and the
 accepted final answer. Read the question, answer it yourself, then check. The revision
@@ -46,6 +46,7 @@ isn't enough and you need the full argument trail behind a specific decision.
 |---|---|
 | Phase 6 — LLM API Fundamentals | [phase-6-revision.md](phase-6-revision.md) |
 | Phase 7 — Vector and Retrieval Foundations | [phase-7-revision.md](phase-7-revision.md) |
+| Phase 8 — RAG (closed early, 2026-10-06) | [phase-8-revision.md](phase-8-revision.md) |
 
 *(Phase 0 has no revision guide yet — it predates this folder's convention. Its
 milestone files below still exist and follow the same Q&A format.)*
@@ -64,9 +65,13 @@ milestone files below still exist and follow the same Q&A format.)*
 | [7.1](7.1.md) | Cosine similarity from scratch | Transcribed |
 | [7.2](7.2.md) | Real embeddings + hand-rolled brute-force retrieval | Transcribed |
 | [8.1](8.1.md) | `dispute-service` scaffolding + `pgvector` proven | Transcribed |
+| 8.2 | Chunk → embed → store, wired end-to-end for one real document | No interview — skipped by deliberate human choice, recorded honestly in `ROADMAP.md`, not backfilled |
 | [8.3](8.3.md) | Productionized scheduled batch ingestion | Transcribed |
+| [8.4](8.4.md) | A real downstream-task evaluation harness | Mixed — pre-compaction Q&A reconstructed from a summary, post-compaction Q&A transcribed |
+| [8.5](8.5.md) | Chunking-strategy comparison | Transcribed, deliberately shortened (2 questions, not the usual 5+) — see the file's own note |
 
 **Fidelity note:** milestones 0.2 through 6.2 predate this conversation's own
 transcript and are reconstructed from `ROADMAP.md`'s narrative summaries — accurate in
 substance, but not verbatim. Milestones 6.3 onward were transcribed directly from a
-live session transcript.
+live session transcript, with the two exceptions noted above (8.2's intentional gap,
+8.4's partial reconstruction across a context-compaction boundary).
